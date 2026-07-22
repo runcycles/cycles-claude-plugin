@@ -6,14 +6,22 @@
 - NEVER use --no-gpg-sign flag
 
 # Cycles strict rules
-- yaml API specs always the authority
-- always update AUDIT.md files when making changes to server, admin, client repos
-- maintain at least 95% or higher test coverage for all code repos
+- yaml API specs always the authority (wire format is hand-built here — verify field names against cycles-protocol-v0.yaml)
+- always update AUDIT.md when making changes
+- maintain at least 95% or higher test coverage (enforced by vitest.config.js thresholds)
 
-# Build & Test
+# This repo
+Claude Code plugin (hooks + bundled MCP server). Plain ESM JavaScript, zero
+runtime dependencies — keep it that way; the auditable-in-one-sitting size is
+a feature. There is NO build or typecheck step.
+
 - Install: `npm install`
-- Build: `npm run build`
 - Test: `npm test`
-- Test with coverage: `npm run test:coverage`
-- Type check: `npm run typecheck`
+- Coverage (thresholds enforced): `npm run test:coverage`
 - Lint: `npm run lint`
+
+Hook contract facts (from code.claude.com/docs): PreToolUse deny =
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`
+on exit 0; hooks run synchronously in tool dispatch — every network call MUST
+carry a timeout; PreToolUse/PostToolUse share no process — state goes through
+hooks/lib/state.mjs (one file per reservation, atomic per-key).

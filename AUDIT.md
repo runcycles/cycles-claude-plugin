@@ -28,3 +28,17 @@
 4. **Default gating of local reads:** charging `Read`/`Glob`/`Grep`/`LS`/`NotebookRead` added an HTTP round trip per file read and polluted the budget signal with non-actions. Default skip list expanded (operators can tighten via `CYCLES_CC_SKIP_TOOLS`); `Bash`, `Edit`, `Write`, `WebFetch`, `WebSearch`, and `Task` remain gated. Asserted in tests.
 
 **Accepted and documented, not changed:** another plugin's `updatedInput` mutating a tool call between Pre and Post changes the identity hash — the reservation is then released at SessionEnd rather than committed (never double-charged). Session state files for crashed sessions accumulate as empty dirs in the OS temp dir; the OS temp cleaner and server-side TTL both bound the impact.
+
+---
+
+## Self-Review Round 2 — full-repo pass (2026-07-22)
+
+**Disproven hypothesis, recorded for honesty:** suspected the entry-point detection would silently fail under install paths containing spaces (percent-encoding in `import.meta.url`). Tested empirically — hooks copied to a spaced directory fire correctly (verified deny output with fail-closed against an unreachable server) because only the space-free basename is compared. No change.
+
+**Fixed:**
+1. **Coverage thresholds now enforced** (`vitest.config.js`: 95% lines/functions/statements, 85% branches) — the org's 95% rule was previously aspirational; CI would have passed on any coverage.
+2. **Windows CI leg added** — hooks run on end-user machines; path joining, tmpdir state, and process spawning now get exercised on windows-latest × Node 20/22.
+3. **CLAUDE.md rewritten** — it was a stale copy from cycles-mcp-server referencing nonexistent build/typecheck scripts; now documents this repo's actual commands, the zero-dependency constraint, and the load-bearing hook-contract facts (deny JSON shape, mandatory network timeouts, cross-process state rules).
+4. **Dormancy edge:** an invalid `CYCLES_DEFAULT_*` with NO base URL configured used to deny every tool call — turning a dormant plugin into a total blocker on a machine that never opted into enforcement. Now: no base URL ⇒ dormant regardless; invalid defaults fail loudly only when otherwise configured. Tested both ways.
+
+**Accepted with documentation:** installing the plugin without env config leaves the bundled MCP server failing at startup (CYCLES_BASE_URL is required) until the user completes setup — deliberate; an enforcement product must not silently default to mock mode.
