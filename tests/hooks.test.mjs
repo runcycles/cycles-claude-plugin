@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ENV = {
-  CYCLES_BASE_URL: "http://cycles",
+  CYCLES_BASE_URL: "https://cycles",
   CYCLES_API_KEY: "k",
   CYCLES_DEFAULT_TENANT: "t1",
 };
@@ -123,9 +123,9 @@ describe("pre-tool-use", () => {
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("denies invalid base URLs instead of misclassifying them as fail-open outages", async () => {
+  it("denies invalid base URLs before skip-list evaluation instead of failing open", async () => {
     const fn = mockCycles([]);
-    await preToolUse(input(), { ...ENV, CYCLES_BASE_URL: "not-a-url" });
+    await preToolUse(input({ tool_name: "TodoWrite" }), { ...ENV, CYCLES_BASE_URL: "not-a-url" });
     const out = JSON.parse(written());
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("CYCLES_BASE_URL");
@@ -145,6 +145,16 @@ describe("pre-tool-use", () => {
     await preToolUse(input({ tool_name: "mcp__plugin_cycles-budget-guard_cycles__cycles_reserve" }), ENV);
     await preToolUse(input({ tool_name: "mcp__cycles__cycles_check_balance" }), ENV);
     await preToolUse(input({ tool_name: "TodoWrite" }), ENV);
+    expect(fn).not.toHaveBeenCalled();
+    expect(written()).toBe("");
+  });
+
+  it("keeps exact Cycles recovery tools available when enforcement config is invalid", async () => {
+    const fn = mockCycles([]);
+    await preToolUse(
+      input({ tool_name: "mcp__cycles__cycles_check_balance" }),
+      { ...ENV, CYCLES_BASE_URL: "not-a-url" },
+    );
     expect(fn).not.toHaveBeenCalled();
     expect(written()).toBe("");
   });
@@ -200,7 +210,7 @@ describe("pre-tool-use", () => {
     const otherSession = `iso-${Math.random().toString(36).slice(2)}`;
     writeRecord(RK, otherSession, "k_iso", { type: "event", toolName: "Bash", amount: 5 });
 
-    const OTHER_ENV = { CYCLES_BASE_URL: "http://other-cycles", CYCLES_API_KEY: "k2", CYCLES_DEFAULT_TENANT: "other-tenant" };
+    const OTHER_ENV = { CYCLES_BASE_URL: "https://other-cycles", CYCLES_API_KEY: "k2", CYCLES_DEFAULT_TENANT: "other-tenant" };
     const fn = mockCycles([]);
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: "unrelated" }, OTHER_ENV);
@@ -296,7 +306,7 @@ describe("pre-tool-use", () => {
   });
 
   it("stays dormant without a subject even when unrelated enforcement settings are invalid", async () => {
-    await preToolUse(input(), { CYCLES_BASE_URL: "http://cycles", CYCLES_CC_COST: "broken" });
+    await preToolUse(input(), { CYCLES_BASE_URL: "https://cycles", CYCLES_CC_COST: "broken" });
     expect(written()).toBe("");
   });
 });
@@ -310,7 +320,7 @@ describe("post-tool-use", () => {
     const call = input({ tool_use_id: "tooluse_pair" });
     await preToolUse(call, ENV);
     await postToolUse(call, ENV);
-    expect(fn.mock.calls[1][0]).toBe("http://cycles/v1/reservations/rsv_9/commit");
+    expect(fn.mock.calls[1][0]).toBe("https://cycles/v1/reservations/rsv_9/commit");
     expect(JSON.parse(fn.mock.calls[1][1].body).idempotency_key).toBe(`${toolCallKey(call)}_c`);
     expect(pendingRecords(RK, session)).toEqual([]);
   });
@@ -438,7 +448,7 @@ describe("session-start recovery (executed actions only — never another sessio
     ]);
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: session }, ENV);
-    expect(fn.mock.calls.map((c) => c[0])).toEqual(["http://cycles/v1/events", "http://cycles/v1/events"]);
+    expect(fn.mock.calls.map((c) => c[0])).toEqual(["https://cycles/v1/events", "https://cycles/v1/events"]);
     expect(pendingRecords(RK, stale)).toEqual([]);
     expect(pendingRecords(RK, session)).toEqual([]);
   });
@@ -493,7 +503,7 @@ describe("post-tool-use settlement", () => {
     const call = input({ tool_use_id: "tooluse_exp" });
     await preToolUse(call, ENV);
     await postToolUse(call, ENV);
-    expect(fn.mock.calls[2][0]).toBe("http://cycles/v1/events");
+    expect(fn.mock.calls[2][0]).toBe("https://cycles/v1/events");
     expect(JSON.parse(fn.mock.calls[2][1].body).idempotency_key).toBe(`${toolCallKey(call)}_e`);
     expect(pendingRecords(RK, session)).toEqual([]);
   });
@@ -512,7 +522,7 @@ describe("post-tool-use settlement", () => {
     // session end applies the pending event instead of releasing
     const fn2 = mockCycles([{ status: 200, body: { status: "APPLIED", event_id: "evt_p" } }]);
     await sessionEnd({ session_id: session }, ENV);
-    expect(fn2.mock.calls[0][0]).toBe("http://cycles/v1/events");
+    expect(fn2.mock.calls[0][0]).toBe("https://cycles/v1/events");
     expect(pendingRecords(RK, session)).toEqual([]);
   });
 
@@ -563,7 +573,7 @@ describe("post-tool-use settlement", () => {
       const call = input({ tool_use_id: `tooluse_${code}` });
       await preToolUse(call, ENV);
       await postToolUse(call, ENV);
-      expect(fn.mock.calls[2][0]).toBe("http://cycles/v1/events");
+      expect(fn.mock.calls[2][0]).toBe("https://cycles/v1/events");
       expect(pendingRecords(RK, session)).toEqual([]);
     }
   });
@@ -589,7 +599,7 @@ describe("post-tool-use-failure", () => {
     const call = input({ tool_use_id: "tooluse_tf" });
     await preToolUse(call, ENV);
     await postToolUseFailure(call, ENV);
-    expect(fn.mock.calls[1][0]).toBe("http://cycles/v1/reservations/rsv_tf/release");
+    expect(fn.mock.calls[1][0]).toBe("https://cycles/v1/reservations/rsv_tf/release");
     expect(JSON.parse(fn.mock.calls[1][1].body).reason).toBe("tool call failed");
     expect(pendingRecords(RK, session)).toEqual([]);
   });
@@ -639,8 +649,8 @@ describe("session-end", () => {
     const releaseUrls = fn.mock.calls.slice(2).map((c) => c[0]);
     expect(releaseUrls).toEqual(
       expect.arrayContaining([
-        "http://cycles/v1/reservations/rsv_a/release",
-        "http://cycles/v1/reservations/rsv_b/release",
+        "https://cycles/v1/reservations/rsv_a/release",
+        "https://cycles/v1/reservations/rsv_b/release",
       ]),
     );
     expect(pendingRecords(RK, session)).toEqual([]);

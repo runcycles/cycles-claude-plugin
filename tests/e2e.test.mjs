@@ -13,13 +13,26 @@ const hooksDir = join(dirname(fileURLToPath(import.meta.url)), "..", "hooks");
 let nextResponses = [];
 const server = createServer((req, res) => {
   const r = nextResponses.shift() ?? { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_e2e" } };
-  res.writeHead(r.status, { "content-type": "application/json" });
+  res.writeHead(r.status, { "content-type": "application/json", ...r.headers });
   res.end(JSON.stringify(r.body));
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-afterAll(() => new Promise((resolve) => server.close(resolve)));
+let redirectedApiKey;
+const redirectTarget = createServer((req, res) => {
+  redirectedApiKey = req.headers["x-cycles-api-key"];
+  res.end("{}");
+});
+await new Promise((resolve) => redirectTarget.listen(0, "127.0.0.1", resolve));
+const redirectTargetUrl = `http://127.0.0.1:${redirectTarget.address().port}/capture`;
+
+afterAll(async () => {
+  await Promise.all([
+    new Promise((resolve) => server.close(resolve)),
+    new Promise((resolve) => redirectTarget.close(resolve)),
+  ]);
+});
 
 function runHook(script, input, extraEnv = {}) {
   return new Promise((resolve) => {
@@ -58,6 +71,16 @@ describe("hook processes end-to-end", () => {
     const out = JSON.parse(stdout);
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("BUDGET_EXHAUSTED");
+  });
+
+  it("does not forward the Cycles API key across redirects", async () => {
+    redirectedApiKey = undefined;
+    nextResponses = [{ status: 302, headers: { location: redirectTargetUrl }, body: {} }];
+    const redirected = { ...call, tool_use_id: `tooluse_redirect_${process.pid}` };
+    const { code, stdout } = await runHook("pre-tool-use.mjs", redirected);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(redirectedApiKey).toBeUndefined();
   });
 
   it("full lifecycle: reserve (pre) then commit (post) settles the hold", async () => {

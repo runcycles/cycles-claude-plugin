@@ -1,0 +1,31 @@
+name: Public install smoke
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Validate and install from public repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install the current Claude Code release
+        run: npm install --global @anthropic-ai/claude-code@latest
+      - run: claude --version
+      - run: claude plugin validate .claude-plugin/plugin.json --strict
+      - run: claude plugin validate .claude-plugin/marketplace.json --strict
+      - run: npm run smoke:install
+        env:
+          MARKETPLACE_SOURCE: runcycles/cycles-claude-plugin

@@ -63,6 +63,13 @@ function rememberBestEffort(routing, sessionId, key, reservationId) {
 }
 
 export async function run(input, env = process.env) {
+  // Cycles tools must remain reachable even when this hook's own config is
+  // invalid: they are the recovery/diagnostic path and gating them would also
+  // recurse back into Cycles. Match only the exact namespaces before parsing
+  // operator config; lookalikes continue through normal validation/gating.
+  const candidateToolName = typeof input?.tool_name === "string" ? input.tool_name : "";
+  if (CYCLES_TOOL_NS.test(candidateToolName)) return;
+
   let config;
   try {
     config = loadConfig(env);
@@ -83,8 +90,8 @@ export async function run(input, env = process.env) {
     output("deny", "Cycles enforcement received malformed hook input; the tool call is blocked.");
     return;
   }
-  const toolName = String(input.tool_name ?? "");
-  if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
+  const toolName = input.tool_name;
+  if (config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
   const rk = routingKey(config);

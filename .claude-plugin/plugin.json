@@ -1,7 +1,7 @@
 {
   "name": "cycles-budget-guard",
   "displayName": "Cycles Budget Guard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating, AI-agent cost control, usage metering, and MCP budget tools.",
   "author": {
     "name": "runcycles",

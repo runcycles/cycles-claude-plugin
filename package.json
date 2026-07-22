@@ -1,7 +1,7 @@
 {
   "name": "@runcycles/cycles-claude-plugin",
-  "version": "0.1.1",
-  "description": "Hard budget enforcement for Claude Code tool calls with AI-agent cost control and Cycles usage metering",
+  "version": "0.2.0",
+  "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating, AI-agent cost control, usage metering, and MCP budget tools.",
   "license": "Apache-2.0",
   "author": {
     "name": "runcycles",
@@ -35,7 +35,9 @@
   "scripts": {
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint hooks/ tests/ eslint.config.js vitest.config.js"
+    "lint": "eslint hooks/ scripts/ tests/ eslint.config.js vitest.config.js",
+    "check:metadata": "node scripts/check-metadata.mjs",
+    "smoke:install": "node scripts/smoke-install.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

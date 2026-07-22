@@ -1,28 +1,39 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
-**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8 and metadata release review)
+**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8, metadata release review, and operational hardening)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
-**Plugin:** `cycles-budget-guard` v0.1.1 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
+**Plugin:** `cycles-budget-guard` v0.2.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
 
 ## Current design (authoritative — supersedes anything below that contradicts it)
 
 - **Dispatch-path enforcement:** PreToolUse reserves before every GATED tool call and denies on: server DENY; any authoritative 4xx protocol rejection (exhausted/frozen/closed budgets, debt, auth, invalid request); any MALFORMED protocol response or hook input — integrity failures never grant execution. Fail-open (allow + warning) applies ONLY to outages: 5xx, network errors, and the 4s request timeout; `CYCLES_CC_FAIL_CLOSED=true` denies on outages too.
-- **Enforcement scope:** all tools EXCEPT the operator skip list (default: local zero-cost reads — `Read|Glob|Grep|LS|NotebookRead|TodoWrite|AskUserQuestion`; set `CYCLES_CC_SKIP_TOOLS=^$` to gate everything) and the Cycles budget tools themselves, matched by exact namespace (`^mcp__(plugin_cycles-budget-guard_)?cycles__` — lookalikes like `mcp__bicycles__*` are gated).
+- **Enforcement scope:** all tools EXCEPT the operator skip list (default: local zero-cost reads — `Read|Glob|Grep|LS|NotebookRead|TodoWrite|AskUserQuestion`; set `CYCLES_CC_SKIP_TOOLS=^$` to gate every non-Cycles tool) and the Cycles budget tools themselves, matched by exact namespace (`^mcp__(plugin_cycles-budget-guard_)?cycles__` — lookalikes like `mcp__bicycles__*` are gated). Exact Cycles tools bypass config parsing so recovery remains available even when an enforcement variable is invalid.
 - **Caps:** ALLOW_WITH_CAPS requires a closed-schema caps object: integer/non-negative numeric fields, ≤256-character list entries, no unknown fields, and no caps on other decisions. `tool_allowlist`/`tool_denylist` are enforced at the gate with the protocol's allowlist precedence. Violations are malformed → deny; any plausible hold is released or recorded. Remaining caps are surfaced via `hookSpecificOutput.additionalContext` without altering the user permission flow.
 - **Identity:** keys are `cc_<sha256(session_id | tool_use_id)[:32]>` — `tool_use_id` is the documented per-call unique id, so distinct identical calls charge separately and transport retries replay. Content-hash fallback exists only for Claude Code versions predating `tool_use_id` (collision limit documented there).
 - **Settlement lifecycle:** state is atomically replaced and typed by lifecycle: `hold` before outcome, `commit` once the action succeeded, and `event` once a gone reservation requires fallback charging. Successful tools are NEVER released after a failed commit: Post, SessionEnd, and SessionStart retry commit, then create an idempotent event on EXPIRED/FINALIZED/NOT_FOUND. Tool failure releases only `hold` records. State is deleted only after a confirmed `COMMITTED`, `RELEASED`, or `APPLIED` response (or a terminal release result for an unexecuted hold).
 - **Routing-scoped state:** per-user temporary state lives under a non-secret routing hash of (base URL, subject, unit), so recovery can only see records created by the same OS user under an IDENTICAL routing configuration.
 - **Replay points:** replayed Post hooks, SessionEnd, and SessionStart retry `commit`/`event` records; SessionStart never releases `hold` records because another session may be mid-call. Stranded unresolved holds are time-bounded by TTL. Reserve-time validation failures carrying a plausible reservation id are released immediately or recorded for retry.
 - **TTL:** configurable `CYCLES_CC_TTL_MS` (default 30 min, validated 1s–24h) — chosen to outlive permission prompts and long tool runs.
-- **Failure posture:** unconfigured (no base URL or no subject setting) = dormant; once both are present, every invalid enforcement setting is a loud deny naming the variable; outages = fail-open by default. Once a reservation is granted, inability to persist settlement state denies and returns the hold rather than falling through to fail-open.
-- **Privacy:** only the configured API credential, subject identifiers, tool NAMEs, unit/amount, and local hash digests leave the machine; `tool_input` is hashed locally and never transmitted.
+- **Failure posture:** unconfigured (no base URL or no subject setting) = dormant; once both are present, every invalid enforcement setting is a loud deny naming the variable for all non-Cycles calls before skip-list evaluation (exact Cycles recovery tools stay available); outages = fail-open by default. Once a reservation is granted, inability to persist settlement state denies and returns the hold rather than falling through to fail-open.
+- **Privacy:** hook requests contain only enforcement metadata (credential and subject identifiers, tool name, unit/amount/TTL, reservation/idempotency identifiers, and fixed settlement reasons). Tool arguments, file contents, and raw prompts never leave the machine; arguments contribute only to the locally computed legacy-fallback digest when `tool_use_id` is unavailable. Non-loopback endpoints require HTTPS; redirects are never followed and their 3xx responses deny as authoritative, so budget decisions cannot be forged in transit and the custom API-key header cannot be forwarded to another origin.
 - **Zero runtime dependencies** by policy; every network call carries a 4s deadline; LF enforced repo-wide (`.gitattributes`).
 
 ## Current verification (2026-07-22)
 
-75 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
+81 tests across unit + checked-in e2e (real hook processes against a live HTTP server), secret-redaction diagnostics, and bounded install-smoke execution; coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × Ubuntu/Windows/macOS, strict Claude plugin validation, metadata consistency, and isolated install smoke testing.
 
 ## History (appended review rounds; superseded statements above)
+
+---
+
+## Operational Hardening Review (2026-07-22)
+
+1. **Marketplace-aware CI:** strict validation targets both the plugin and marketplace manifests, metadata/version consistency and an isolated fresh-install test catch packaging failures, and Node 22/24 coverage spans Ubuntu, Windows, and macOS. Project instructions live at `.claude/CLAUDE.md`, where Claude Code loads them without presenting ignored plugin-root context.
+2. **Dependency operations:** Dependabot covers npm and GitHub Actions, while a scheduled check opens an issue when the exactly pinned companion MCP server falls behind npm.
+3. **Secret-safe diagnostics:** `/cycles-budget-guard:doctor` uses the production parser and emits only effective posture plus an API-key-present boolean; tests assert the credential value never appears.
+4. **Maintainer and user experience:** repository-specific security guidance, ownership, issue forms, architecture, quickstart, denial proof, and troubleshooting make support actionable without weakening privacy.
+5. **Repository governance:** protected-main and merge-hygiene settings require reviewable, green changes while preserving an administrator recovery path.
+6. **Self-review remediation:** enforcement documentation states the default fail-open outage exception and exact recursion exemption at the architecture boundary; Cycles recovery tools bypass invalid operator config; non-loopback HTTP and redirect-based credential/decision attacks are blocked; smoke/test/monitor jobs are time-bounded; scheduled public-repository installs validate against the current Claude Code release while PR validation stays exactly pinned for reproducibility; package/marketplace metadata and privacy claims are checked precisely.
 
 ---
 
@@ -37,7 +48,7 @@
 ## Self-Review Round 1 (2026-07-22) — four findings, all fixed
 
 1. **No fetch deadline (serious):** hooks run synchronously in tool dispatch; a black-holed server would have hung every tool call until the hook runner's timeout. All requests now carry `AbortSignal.timeout(4000)`; fail-open/closed semantics apply to timeouts like any other failure. Asserted in tests.
-2. **Broken MCP env passthrough (serious):** `plugin.json` mapped env via `"${CYCLES_BASE_URL}"`-style placeholders, but Claude Code substitutes only the `CLAUDE_*` plugin variables and `user_config` — the bundled MCP server would have received literal `${...}` strings. The env block is removed; the spawned server inherits the process environment, which is where these variables already live.
+2. **Broken MCP env passthrough (serious):** `plugin.json` mapped env via `"${CYCLES_BASE_URL}"`-style placeholders, but Claude Code substitutes only the `CLAUDE_*` plugin variables and `user_config` — the companion MCP server would have received literal `${...}` strings. The env block is removed; the spawned server inherits the process environment, which is where these variables already live.
 3. **State race under parallel tool calls:** Claude Code runs tools concurrently; the single-JSON read-modify-write could lose a reservation (orphaned until session end). State is now one file per reservation key — remember (write) and take (read+unlink) are independently atomic. Semantics and tests unchanged.
 4. **Default gating of local reads:** charging `Read`/`Glob`/`Grep`/`LS`/`NotebookRead` added an HTTP round trip per file read and polluted the budget signal with non-actions. Default skip list expanded (operators can tighten via `CYCLES_CC_SKIP_TOOLS`); `Bash`, `Edit`, `Write`, `WebFetch`, `WebSearch`, and `Task` remain gated. Asserted in tests.
 
@@ -55,7 +66,7 @@
 3. **CLAUDE.md rewritten** — it was a stale copy from cycles-mcp-server referencing nonexistent build/typecheck scripts; now documents this repo's actual commands, the zero-dependency constraint, and the load-bearing hook-contract facts (deny JSON shape, mandatory network timeouts, cross-process state rules).
 4. **Dormancy edge:** an invalid `CYCLES_DEFAULT_*` with NO base URL configured used to deny every tool call — turning a dormant plugin into a total blocker on a machine that never opted into enforcement. Now: no base URL ⇒ dormant regardless; invalid defaults fail loudly only when otherwise configured. Tested both ways.
 
-**Accepted with documentation:** installing the plugin without env config leaves the bundled MCP server failing at startup (CYCLES_BASE_URL is required) until the user completes setup — deliberate; an enforcement product must not silently default to mock mode.
+**Accepted with documentation:** installing the plugin without env config leaves the companion MCP server failing at startup (`CYCLES_BASE_URL` is required) until the user completes setup — deliberate; an enforcement product must not silently default to mock mode.
 
 **Windows CI leg pays off immediately:** the new windows-latest matrix caught a real cross-platform bug on its first run — vite's shebang stripping fails when the shebang line ends in CRLF (windows runners check out with `core.autocrlf=true`), so every hook entry file failed to parse under vitest while passing under plain Node. Root-caused by local reproduction with an autocrlf clone and per-module bisection. Fix: shebangs removed (decorative — hooks.json invokes `node <script>` explicitly) and `.gitattributes` forces LF repo-wide, protecting user installs too (plugin installation is a git clone subject to the user's autocrlf).
 
@@ -73,7 +84,7 @@ The review's headline was correct: the repository was not yet entitled to claim 
 6. **Unpinned runtime download (P1).** `npx -y @runcycles/mcp-server` executed whatever version npm served. Now pinned to an exact audited version (`@0.6.0`); "bundled" wording corrected to "companion, pinned, fetched via npx".
 7. **EOL runtime (P2).** Engines now `>=22`; CI tests 22/24 (Node 20 reached EOL).
 8. **Coverage vs contract (P2).** Tests now construct production-shaped inputs (`tool_use_id` present), and cover: every authoritative rejection class, malformed 200s, caps enforcement, failure settlement, transient-failure state retention, expiry event fallback, exact-namespace guard — plus a checked-in end-to-end suite spawning the real hook processes against a live HTTP server (entry blocks are no longer untested). 45 tests; thresholds enforced.
-9. **Documentation honesty (P2).** README no longer claims every call is gated (enforcement scope stated precisely, with the skip list and an opt-out to gate everything); the collision claim is rewritten for the tool_use_id reality; "bundled" corrected; this AUDIT reflects current counts and discloses the above.
+9. **Documentation honesty (P2).** README no longer claims every call is gated (enforcement scope stated precisely, with the skip list and an opt-out to gate every non-Cycles tool); the collision claim is rewritten for the tool_use_id reality; "bundled" corrected; this AUDIT reflects current counts and discloses the above.
 
 ---
 

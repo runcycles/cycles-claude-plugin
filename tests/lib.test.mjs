@@ -17,8 +17,8 @@ afterEach(() => {
 
 describe("loadConfig", () => {
   it("reads base config with defaults", () => {
-    const c = loadConfig({ CYCLES_BASE_URL: "http://x/", CYCLES_API_KEY: "k", CYCLES_DEFAULT_TENANT: "t" });
-    expect(c.baseUrl).toBe("http://x");
+    const c = loadConfig({ CYCLES_BASE_URL: "https://x/", CYCLES_API_KEY: "k", CYCLES_DEFAULT_TENANT: "t" });
+    expect(c.baseUrl).toBe("https://x");
     expect(c.subject).toEqual({ tenant: "t" });
     expect(c.unit).toBe("CREDITS");
     expect(c.cost).toBe(1);
@@ -28,7 +28,7 @@ describe("loadConfig", () => {
 
   it("is unconfigured without base url or subject", () => {
     expect(isConfigured(loadConfig({}))).toBe(false);
-    expect(isConfigured(loadConfig({ CYCLES_BASE_URL: "http://x" }))).toBe(false);
+    expect(isConfigured(loadConfig({ CYCLES_BASE_URL: "https://x" }))).toBe(false);
   });
 
   it("rejects invalid subject defaults", () => {
@@ -38,8 +38,20 @@ describe("loadConfig", () => {
   });
 
   it("rejects invalid or unsafe base URLs", () => {
-    for (const value of ["cycles.local", "ftp://cycles.local", "https://user:pass@cycles.local", "https://cycles.local/?x=1", " https://cycles.local"]) {
+    for (const value of [
+      "cycles.local",
+      "ftp://cycles.local",
+      "http://cycles.local",
+      "https://user:pass@cycles.local",
+      "https://cycles.local/?x=1",
+      "https://cycles.local/?",
+      "https://cycles.local/#",
+      " https://cycles.local",
+    ]) {
       expect(() => loadConfig({ CYCLES_BASE_URL: value }), value).toThrow("CYCLES_BASE_URL");
+    }
+    for (const value of ["http://localhost:8080", "http://127.0.0.2:8080", "http://[::1]:8080"]) {
+      expect(loadConfig({ CYCLES_BASE_URL: value }).baseUrl, value).toBe(value);
     }
     expect(loadConfig({ CYCLES_BASE_URL: "HTTPS://CYCLES.LOCAL:443/" }).baseUrl).toBe("https://cycles.local");
   });
@@ -107,6 +119,7 @@ describe("cycles-client", () => {
     const [url, init] = fn.mock.calls[0];
     expect(url).toBe("http://cycles/v1/reservations");
     expect(init.headers["x-cycles-api-key"]).toBe("key1");
+    expect(init.redirect).toBe("manual");
     // dispatch-path deadline: a black-holed server must not hang tool calls
     expect(init.signal).toBeInstanceOf(AbortSignal);
     const body = JSON.parse(init.body);
