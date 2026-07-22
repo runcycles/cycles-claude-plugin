@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // PreToolUse: reserve budget before the tool call executes. DENY from the
 // Cycles server blocks the call at the dispatch layer — the model cannot
 // skip it. This is the non-bypassable enforcement the MCP server alone
@@ -23,7 +22,11 @@ export async function run(input, env = process.env) {
   try {
     config = loadConfig(env);
   } catch (err) {
-    // Bad operator config: fail loudly rather than silently unenforced.
+    // Bad operator config on an otherwise-configured plugin: fail loudly
+    // rather than silently unenforced. With no base URL at all the plugin
+    // would be dormant anyway — a stray bad default must not block a setup
+    // that never opted into enforcement.
+    if (!env.CYCLES_BASE_URL) return;
     output("deny", `Cycles plugin misconfigured: ${err.message}`);
     return;
   }

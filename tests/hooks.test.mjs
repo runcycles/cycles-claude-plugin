@@ -112,11 +112,16 @@ describe("pre-tool-use", () => {
     expect(written()).toBe("");
   });
 
-  it("denies loudly on invalid operator config", async () => {
+  it("denies loudly on invalid operator config when otherwise configured", async () => {
     await preToolUse(input(), { ...ENV, CYCLES_DEFAULT_TENANT: "   " });
     const out = JSON.parse(written());
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("CYCLES_DEFAULT_TENANT");
+  });
+
+  it("stays dormant on invalid defaults when no base URL is set", async () => {
+    await preToolUse(input(), { CYCLES_DEFAULT_TENANT: "   " });
+    expect(written()).toBe("");
   });
 });
 
