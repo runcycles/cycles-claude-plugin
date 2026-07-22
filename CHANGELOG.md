@@ -7,9 +7,15 @@ All notable changes to Cycles Budget Guard are documented here. This project fol
 ### Added
 
 - Add a secret-safe `/cycles-budget-guard:doctor` command backed by the production configuration parser.
-- Add macOS coverage, strict plugin and marketplace validation, metadata consistency enforcement, bounded local installation smoke testing, and scheduled public-repository installation testing against the current Claude Code release.
+- Add macOS coverage, strict plugin and marketplace validation, package/marketplace metadata consistency enforcement, bounded jobs and local installation smoke testing, and scheduled public-repository validation/installation against the current Claude Code release.
+- Keep exact Cycles recovery tools available during invalid plugin configuration while continuing to gate namespace lookalikes.
 - Add weekly npm and GitHub Actions dependency updates plus monitoring for newer companion MCP server releases.
 - Add an architecture diagram, five-minute quickstart, concrete denial proof, troubleshooting guide, security policy, code ownership, and structured issue forms.
+
+### Security
+
+- Reject HTTP redirects as authoritative responses so `X-Cycles-API-Key` cannot be forwarded and redirects cannot trigger fail-open execution.
+- Require HTTPS for non-loopback Cycles endpoints and reject query/fragment-bearing base URLs, including empty delimiters, so credentials and budget decisions cannot be intercepted, altered, or routed to an unintended target.
 
 ### Repository operations
 

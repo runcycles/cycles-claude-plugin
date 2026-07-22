@@ -7,7 +7,7 @@
 
 **Hard budget enforcement for Claude Code tool calls.** The [Cycles MCP server](https://github.com/runcycles/cycles-mcp-server) gives agents budget *tools*; this plugin puts Cycles in the **dispatch path**: gated tool calls are held behind a `PreToolUse` hook that reserves budget first, and a Cycles DENY blocks the call at the harness layer — the model cannot skip it. This closes the cooperative-enforcement gap documented in the MCP server's [Security Model](https://github.com/runcycles/cycles-mcp-server#security-model--enforcement-boundary).
 
-**Enforcement scope, precisely:** all tools are gated EXCEPT (a) the configurable skip list, which defaults to local zero-cost read tools (`Read`/`Glob`/`Grep`/`LS`/`NotebookRead`/`TodoWrite`/`AskUserQuestion`), and (b) the Cycles budget tools themselves, matched by exact namespace (recursion guard). Set `CYCLES_CC_SKIP_TOOLS=^$` to gate literally everything.
+**Enforcement scope, precisely:** all tools are gated EXCEPT (a) the configurable skip list, which defaults to local zero-cost read tools (`Read`/`Glob`/`Grep`/`LS`/`NotebookRead`/`TodoWrite`/`AskUserQuestion`), and (b) the Cycles budget tools themselves, matched by exact namespace (recursion guard). Set `CYCLES_CC_SKIP_TOOLS=^$` to gate every non-Cycles tool.
 
 Built for teams that need enforceable AI-agent budgets, auditable action-level cost control, and a clear runtime authority boundary around Claude Code automation.
 
@@ -55,23 +55,38 @@ Requires Node.js 22 or newer.
 /plugin install cycles-budget-guard@runcycles
 ```
 
-2. Set the environment (the same variables are used by the companion MCP server):
+2. Set the environment before launching or restarting Claude Code (the same variables are used by the companion MCP server).
+
+For Bash or zsh:
 
 ```bash
 export CYCLES_BASE_URL=https://your-cycles-server
 export CYCLES_API_KEY=your-key
-export CYCLES_DEFAULT_TENANT=acme        # required for enforcement — defines whose budget is charged
+export CYCLES_DEFAULT_TENANT=acme        # recommended; at least one CYCLES_DEFAULT_* field is required
 export CYCLES_DEFAULT_APP=claude-code    # optional, finer attribution
 ```
 
-If `CYCLES_BASE_URL` or a subject default is missing, the plugin stays dormant (normal Claude Code permission flow) — it never half-enforces. An *invalid* value fails loudly by blocking calls with a config error.
+For PowerShell:
 
-3. Restart Claude Code or run `/reload-plugins`, then run:
+```powershell
+$env:CYCLES_BASE_URL = "https://your-cycles-server"
+$env:CYCLES_API_KEY = "your-key"
+$env:CYCLES_DEFAULT_TENANT = "acme"
+$env:CYCLES_DEFAULT_APP = "claude-code"
+```
+
+Supported subject fields are `TENANT`, `WORKSPACE`, `APP`, `WORKFLOW`, `AGENT`, and `TOOLSET`; configure at least one as `CYCLES_DEFAULT_<FIELD>`. Tenant is the usual top-level budget owner.
+
+If `CYCLES_BASE_URL` or a subject default is missing, the plugin stays dormant (normal Claude Code permission flow) — it never half-enforces. An *invalid* value fails loudly by blocking every non-Cycles call with a config error, including tools that the valid skip pattern would normally exempt; exact Cycles recovery tools remain available.
+
+3. Start or restart Claude Code from that configured shell, then run:
 
 ```text
 /cycles-budget-guard:doctor
 /cycles-budget-guard:budget
 ```
+
+`/reload-plugins` is sufficient after installation only when the current Claude Code process already inherited the required environment variables.
 
 The doctor's local diagnostic step remains subject to the normal gate and may reserve the configured per-call cost. It never adds a bypass or skip-list exemption.
 
@@ -80,7 +95,7 @@ The doctor's local diagnostic step remains subject to the normal gate and may re
 ## Prove denial enforcement
 
 1. Use a test tenant with an exhausted, frozen, or closed Cycles budget.
-2. Set `CYCLES_CC_SKIP_TOOLS=^$` if you want every tool included in the proof.
+2. Set `CYCLES_CC_SKIP_TOOLS=^$` if you want every non-Cycles tool included in the proof.
 3. Ask Claude Code to run `printf 'THIS MUST NOT RUN\n'` with Bash.
 4. Confirm Cycles denies the reservation and the command produces no output because the tool never executes.
 5. Run `/cycles-budget-guard:budget` to inspect the active budget and routing identity.
@@ -98,7 +113,8 @@ For a fail-closed outage check, set `CYCLES_CC_FAIL_CLOSED=true`, point the test
 | `CYCLES_CC_TTL_MS` | `1800000` (30 min) | Reservation TTL; must outlive permission prompts and long tool runs |
 
 Cycles' own budget tools are never gated (recursion guard), regardless of `CYCLES_CC_SKIP_TOOLS`.
-Once both a base URL and subject setting opt into enforcement, invalid URLs, subjects, units, costs, TTLs, regular expressions, or fail-mode values deny with a named configuration error; they are never treated as outages.
+Once both a base URL and subject setting opt into enforcement, invalid URLs, subjects, units, costs, TTLs, regular expressions, or fail-mode values deny every non-Cycles call with a named configuration error before skip-list evaluation; they are never treated as outages.
+Non-loopback Cycles endpoints must use HTTPS. Plain HTTP is accepted only for `localhost`, `127.0.0.0/8`, and `[::1]` development endpoints so budget decisions and credentials cannot be intercepted or altered in transit.
 
 ## Semantics worth knowing
 
@@ -111,19 +127,19 @@ Once both a base URL and subject setting opt into enforcement, invalid URLs, sub
 
 | Symptom | Likely cause | Resolution |
 |---|---|---|
-| Plugin is installed but tools are not gated | Missing base URL or default subject leaves enforcement dormant | Run `/cycles-budget-guard:doctor`; set `CYCLES_BASE_URL` and at least `CYCLES_DEFAULT_TENANT` |
+| Plugin is installed but tools are not gated | Missing base URL or default subject leaves enforcement dormant | Run `/cycles-budget-guard:doctor`; set `CYCLES_BASE_URL` and at least one supported `CYCLES_DEFAULT_*` subject field (typically `TENANT`) |
 | Companion MCP server does not start | Invalid/missing URL, authentication, or first-run npx download failure | Verify Node.js 22+, network access, URL, and `CYCLES_API_KEY`; then run `/reload-plugins` |
 | Every gated action is blocked with a configuration error | A configured value is invalid | Use the named variable in the denial message; the doctor command reports the same strict validation safely |
 | Server outage allows tool calls | Default posture is fail-open for transport outages only | Set `CYCLES_CC_FAIL_CLOSED=true` for strict environments |
 | Server outage blocks tool calls | Fail-closed mode is active | Restore connectivity or explicitly choose fail-open after reviewing the policy impact |
-| Expected tool is not charged | It matches the default or operator skip regex | Inspect `CYCLES_CC_SKIP_TOOLS`; set it to `^$` to gate every tool |
+| Expected tool is not charged | It matches the default or operator skip regex | Inspect `CYCLES_CC_SKIP_TOOLS`; set it to `^$` to gate every non-Cycles tool |
 | Plugin update is not visible | Third-party marketplace auto-update is off or the session has not reloaded | Run `/plugin marketplace update runcycles`, run `claude plugin update cycles-budget-guard@runcycles` in the shell, then `/reload-plugins` |
 
 When reporting a problem, include the redacted doctor output plus the plugin, Claude Code, Node.js, and operating-system versions. Never include API keys, prompts, tool arguments, or file contents.
 
 ## Privacy
 
-The hooks send only: your configured API credential and subject identifiers, the tool *name*, unit and amount, and derived opaque hashes. **Tool arguments, file contents, and prompts are never sent** — the hash of `tool_input` is computed locally and only the digest leaves the machine as part of the idempotency key. Full policy: https://runcycles.io/privacy
+The hooks send only enforcement metadata: your configured API credential and subject identifiers; the tool *name*; unit, amount, and reservation TTL; reservation and idempotency identifiers; and fixed settlement reasons. **Tool arguments, file contents, and raw prompts are never sent.** Current Claude Code calls derive the opaque idempotency hash from session/tool-use identifiers; the legacy fallback hashes the prompt identifier, tool name, and arguments locally, and only that digest leaves the machine. Non-loopback endpoints require HTTPS; redirects are never followed and their 3xx responses deny as authoritative, so the custom API-key header cannot be forwarded to another origin. Full policy: https://runcycles.io/privacy
 
 ## Resources
 

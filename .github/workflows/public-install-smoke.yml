@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   install:
-    name: Install from public marketplace
+    name: Validate and install from public repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,6 +24,8 @@ jobs:
       - name: Install the current Claude Code release
         run: npm install --global @anthropic-ai/claude-code@latest
       - run: claude --version
+      - run: claude plugin validate .claude-plugin/plugin.json --strict
+      - run: claude plugin validate .claude-plugin/marketplace.json --strict
       - run: npm run smoke:install
         env:
           MARKETPLACE_SOURCE: runcycles/cycles-claude-plugin

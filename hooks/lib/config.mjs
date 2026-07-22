@@ -29,8 +29,12 @@ function normalizeBaseUrl(raw) {
   } catch {
     throw new Error("Invalid CYCLES_BASE_URL: must be an absolute HTTP(S) URL.");
   }
-  if (!new Set(["http:", "https:"]).has(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+  if (!new Set(["http:", "https:"]).has(parsed.protocol) || parsed.username || parsed.password || value.includes("?") || value.includes("#")) {
     throw new Error("Invalid CYCLES_BASE_URL: must be an absolute HTTP(S) URL without credentials, query, or fragment.");
+  }
+  const loopback = parsed.hostname === "localhost" || parsed.hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(parsed.hostname);
+  if (parsed.protocol === "http:" && !loopback) {
+    throw new Error("Invalid CYCLES_BASE_URL: HTTPS is required except for loopback development endpoints.");
   }
   // Return the URL parser's canonical representation. URL accepts a few
   // equivalent spellings (for example uppercase schemes); retaining the raw

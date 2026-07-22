@@ -1,7 +1,7 @@
 {
   "name": "@runcycles/cycles-claude-plugin",
   "version": "0.2.0",
-  "description": "Hard budget enforcement for Claude Code tool calls with AI-agent cost control and Cycles usage metering",
+  "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating, AI-agent cost control, usage metering, and MCP budget tools.",
   "license": "Apache-2.0",
   "author": {
     "name": "runcycles",

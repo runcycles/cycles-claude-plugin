@@ -16,6 +16,10 @@ async function post(config, path, body) {
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    // Never follow a redirect with the custom API-key header. Manual mode
+    // exposes the 3xx response to the authoritative non-5xx rejection path
+    // instead of misclassifying it as a fail-open transport exception.
+    redirect: "manual",
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
