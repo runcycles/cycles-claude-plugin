@@ -23,7 +23,7 @@ export async function run(input, env = process.env) {
   const rk = routingKey(config);
   const record = peekRecord(rk, input.session_id, key);
   if (!record) return;
-  if (record.type === "event") return; // pending charge for an executed action — session end applies it
+  if (record.type !== "hold") return; // executed actions must be committed/charged, never released
 
   try {
     await release(config, {

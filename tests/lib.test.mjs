@@ -34,6 +34,14 @@ describe("loadConfig", () => {
   it("rejects invalid subject defaults", () => {
     expect(() => loadConfig({ CYCLES_DEFAULT_TENANT: "   " })).toThrow("CYCLES_DEFAULT_TENANT");
     expect(() => loadConfig({ CYCLES_DEFAULT_APP: "x".repeat(129) })).toThrow("CYCLES_DEFAULT_APP");
+    expect(() => loadConfig({ CYCLES_DEFAULT_TENANT: "acme/prod" })).toThrow("CYCLES_DEFAULT_TENANT");
+  });
+
+  it("rejects invalid or unsafe base URLs", () => {
+    for (const value of ["cycles.local", "ftp://cycles.local", "https://user:pass@cycles.local", "https://cycles.local/?x=1", " https://cycles.local"]) {
+      expect(() => loadConfig({ CYCLES_BASE_URL: value }), value).toThrow("CYCLES_BASE_URL");
+    }
+    expect(loadConfig({ CYCLES_BASE_URL: "HTTPS://CYCLES.LOCAL:443/" }).baseUrl).toBe("https://cycles.local");
   });
 
   it("parses cost, fail mode and skip pattern", () => {
@@ -60,9 +68,16 @@ describe("loadConfig", () => {
     }
   });
 
-  it("falls back to cost 1 on garbage", () => {
-    expect(loadConfig({ CYCLES_CC_COST: "banana" }).cost).toBe(1);
-    expect(loadConfig({ CYCLES_CC_COST: "-3" }).cost).toBe(1);
+  it("rejects ambiguous or out-of-range enforcement settings", () => {
+    for (const value of ["banana", "1oops", "1.5", "-3", "0"]) {
+      expect(() => loadConfig({ CYCLES_CC_COST: value }), value).toThrow("CYCLES_CC_COST");
+    }
+    expect(() => loadConfig({ CYCLES_CC_TTL_MS: "999" })).toThrow("CYCLES_CC_TTL_MS");
+    expect(() => loadConfig({ CYCLES_CC_TTL_MS: "1000oops" })).toThrow("CYCLES_CC_TTL_MS");
+    expect(() => loadConfig({ CYCLES_CC_UNIT: "DOLLARS" })).toThrow("CYCLES_CC_UNIT");
+    expect(() => loadConfig({ CYCLES_CC_SKIP_TOOLS: "[" })).toThrow("CYCLES_CC_SKIP_TOOLS");
+    expect(() => loadConfig({ CYCLES_CC_FAIL_CLOSED: "yes" })).toThrow("CYCLES_CC_FAIL_CLOSED");
+    expect(loadConfig({ CYCLES_CC_FAIL_CLOSED: "TRUE" }).failClosed).toBe(true);
   });
 });
 
@@ -140,6 +155,14 @@ describe("cycles-client", () => {
     });
   });
 
+  it("treats a null success body as malformed instead of an outage", async () => {
+    mockFetch(200, null);
+    await expect(reserve(config, { idempotencyKey: "k", toolName: "B", amount: 1 })).rejects.toMatchObject({
+      errorCode: "MALFORMED_RESPONSE",
+      malformed: true,
+    });
+  });
+
   it("tolerates non-JSON error bodies", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: () => Promise.reject(new Error("nope")) }));
     await expect(reserve(config, { idempotencyKey: "k", toolName: "B", amount: 1 })).rejects.toMatchObject({ httpStatus: 502 });
@@ -156,6 +179,8 @@ describe("state", () => {
     expect(pendingRecords(RK, session)).toHaveLength(2);
     expect(peekRecord(RK, session, "tu_1")).toEqual({ type: "hold", reservationId: "rsv_1" });
     expect(peekRecord(RK, session, "tu_1")).toBeDefined(); // peek does not consume
+    writeRecord(RK, session, "tu_1", { type: "commit", reservationId: "rsv_1", toolName: "Bash", amount: 1 });
+    expect(peekRecord(RK, session, "tu_1")).toMatchObject({ type: "commit", amount: 1 });
     deleteReservation(RK, session, "tu_1");
     expect(peekRecord(RK, session, "tu_1")).toBeUndefined();
     expect(pendingRecords(RK, session)).toEqual([["tu_2", { type: "event", toolName: "Bash", amount: 3 }]]);
@@ -167,13 +192,27 @@ describe("state", () => {
     const { writeFileSync, mkdirSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const dir = join(tmpdir(), "cycles-claude-plugin", RK, session);
+    const userScope = typeof process.getuid === "function" ? `uid-${process.getuid()}` : "user";
+    const dir = join(tmpdir(), `cycles-claude-plugin-${userScope}`, RK, session);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "corrupt"), "not json{");
     rememberReservation(RK, session, "tu_ok", "rsv_ok");
     const records = pendingRecords(RK, session);
     expect(records).toHaveLength(1);
     expect(records[0][0]).toBe("tu_ok");
+    clearState(RK, session);
+  });
+
+  it("ignores interrupted atomic-write temp files during recovery", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const userScope = typeof process.getuid === "function" ? `uid-${process.getuid()}` : "user";
+    const dir = join(tmpdir(), `cycles-claude-plugin-${userScope}`, RK, session);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".tu_interrupted.123.uuid.tmp"), JSON.stringify({ type: "event", toolName: "Bash", amount: 99 }));
+    rememberReservation(RK, session, "tu_real", "rsv_real");
+    expect(pendingRecords(RK, session)).toEqual([["tu_real", { type: "hold", reservationId: "rsv_real" }]]);
     clearState(RK, session);
   });
 

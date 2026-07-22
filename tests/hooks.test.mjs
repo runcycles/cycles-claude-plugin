@@ -6,6 +6,9 @@ import { run as postToolUseFailure } from "../hooks/post-tool-use-failure.mjs";
 import { toolCallKey } from "../hooks/lib/identity.mjs";
 import { pendingRecords, peekRecord, clearState } from "../hooks/lib/state.mjs";
 import { loadConfig, routingKey } from "../hooks/lib/config.mjs";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const ENV = {
   CYCLES_BASE_URL: "http://cycles",
@@ -13,6 +16,7 @@ const ENV = {
   CYCLES_DEFAULT_TENANT: "t1",
 };
 const RK = routingKey(loadConfig(ENV));
+const STATE_ROOT = `cycles-claude-plugin-${typeof process.getuid === "function" ? `uid-${process.getuid()}` : "user"}`;
 
 let session;
 let stdout;
@@ -119,6 +123,15 @@ describe("pre-tool-use", () => {
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
+  it("denies invalid base URLs instead of misclassifying them as fail-open outages", async () => {
+    const fn = mockCycles([]);
+    await preToolUse(input(), { ...ENV, CYCLES_BASE_URL: "not-a-url" });
+    const out = JSON.parse(written());
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("CYCLES_BASE_URL");
+    expect(fn).not.toHaveBeenCalled();
+  });
+
   it("never gates cycles tools or skip-listed tools", async () => {
     const fn = mockCycles([]);
     await preToolUse(input({ tool_name: "mcp__plugin_cycles-budget-guard_cycles__cycles_reserve" }), ENV);
@@ -188,6 +201,21 @@ describe("pre-tool-use", () => {
     clearState(RK, otherSession);
   });
 
+  it("denies and returns the hold when local reservation state cannot be persisted", async () => {
+    const routingDir = join(tmpdir(), STATE_ROOT, RK);
+    mkdirSync(routingDir, { recursive: true });
+    writeFileSync(join(routingDir, session), "blocks the session directory");
+    const fn = mockCycles([
+      { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_disk" } },
+      { status: 200, body: { status: "RELEASED" } },
+    ]);
+    await preToolUse(input({ tool_use_id: "tooluse_disk" }), ENV);
+    const out = JSON.parse(written());
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("state unavailable");
+    expect(fn.mock.calls[1][0]).toContain("/rsv_disk/release");
+  });
+
   it("records the hold when a cap-denial release fails, so session end can retry", async () => {
     mockCycles([
       { status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: "rsv_leak", caps: { tool_denylist: ["Bash"] } } },
@@ -230,6 +258,23 @@ describe("pre-tool-use", () => {
     expect(out.hookSpecificOutput.additionalContext).toContain("maxTokens=500");
   });
 
+  it("gives a non-empty tool_allowlist precedence over the denylist", async () => {
+    mockCycles([
+      {
+        status: 200,
+        body: {
+          decision: "ALLOW_WITH_CAPS",
+          reservation_id: "rsv_precedence",
+          caps: { tool_allowlist: ["Bash"], tool_denylist: ["Bash"] },
+        },
+      },
+    ]);
+    const call = input({ tool_use_id: "tooluse_precedence" });
+    await preToolUse(call, ENV);
+    expect(written()).toBe("");
+    expect(peekRecord(RK, session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_precedence" });
+  });
+
   it("denies loudly on invalid operator config when otherwise configured", async () => {
     await preToolUse(input(), { ...ENV, CYCLES_DEFAULT_TENANT: "   " });
     const out = JSON.parse(written());
@@ -239,6 +284,11 @@ describe("pre-tool-use", () => {
 
   it("stays dormant on invalid defaults when no base URL is set", async () => {
     await preToolUse(input(), { CYCLES_DEFAULT_TENANT: "   " });
+    expect(written()).toBe("");
+  });
+
+  it("stays dormant without a subject even when unrelated enforcement settings are invalid", async () => {
+    await preToolUse(input(), { CYCLES_BASE_URL: "http://cycles", CYCLES_CC_COST: "broken" });
     expect(written()).toBe("");
   });
 });
@@ -292,8 +342,11 @@ describe("post-tool-use", () => {
     await preToolUse(failCall, ENV);
     await postToolUse(failCall, ENV);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("rsv_f"));
-    // transient failure keeps the record for session-end release
-    expect(pendingRecords(RK, session)).toHaveLength(1);
+    // The tool executed: transient failure must retain a pending COMMIT,
+    // never a generic hold that SessionEnd would release uncharged.
+    expect(pendingRecords(RK, session)).toEqual([
+      [toolCallKey(failCall), { type: "commit", reservationId: "rsv_f", toolName: "Bash", amount: 1 }],
+    ]);
   });
 });
 
@@ -327,9 +380,45 @@ describe("caps validation (malformed caps never bypass)", () => {
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
     expect(peekRecord(RK, session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_mt2" });
   });
+
+  it("rejects caps outside the protocol schema", async () => {
+    const invalidCaps = [
+      { max_tokens: -1 },
+      { max_steps_remaining: 1.5 },
+      { cooldown_ms: -1 },
+      { tool_allowlist: ["x".repeat(257)] },
+      { future_limit: 1 },
+    ];
+    for (const [index, caps] of invalidCaps.entries()) {
+      stdout.mockClear();
+      const fn = mockCycles([
+        { status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: `rsv_schema_${index}`, caps } },
+        { status: 200, body: { status: "RELEASED" } },
+      ]);
+      await preToolUse(input(), ENV);
+      expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(fn.mock.calls[1][0]).toContain(`/rsv_schema_${index}/release`);
+    }
+  });
+
+  it("rejects caps on ALLOW and reservation ids on DENY, cleaning up plausible holds", async () => {
+    for (const body of [
+      { decision: "ALLOW", reservation_id: "rsv_allow_caps", caps: {} },
+      { decision: "DENY", reservation_id: "rsv_deny_hold", reason_code: "POLICY" },
+    ]) {
+      stdout.mockClear();
+      const fn = mockCycles([
+        { status: 200, body },
+        { status: 200, body: { status: "RELEASED" } },
+      ]);
+      await preToolUse(input(), ENV);
+      expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(fn.mock.calls[1][0]).toContain(`/${body.reservation_id}/release`);
+    }
+  });
 });
 
-describe("session-start recovery (events only — never another session's holds)", () => {
+describe("session-start recovery (executed actions only — never another session's holds)", () => {
   it("applies pending events from any session, including the current one", async () => {
     const stale = `stale-${Math.random().toString(36).slice(2)}`;
     const { writeRecord } = await import("../hooks/lib/state.mjs");
@@ -344,6 +433,22 @@ describe("session-start recovery (events only — never another session's holds)
     expect(fn.mock.calls.map((c) => c[0])).toEqual(["http://cycles/v1/events", "http://cycles/v1/events"]);
     expect(pendingRecords(RK, stale)).toEqual([]);
     expect(pendingRecords(RK, session)).toEqual([]);
+  });
+
+  it("retries pending commits from completed tools instead of releasing them", async () => {
+    const stale = `stale-c-${Math.random().toString(36).slice(2)}`;
+    const { writeRecord } = await import("../hooks/lib/state.mjs");
+    writeRecord(RK, stale, "k_commit", {
+      type: "commit",
+      reservationId: "rsv_pending_commit",
+      toolName: "Bash",
+      amount: 2,
+    });
+    const fn = mockCycles([{ status: 200, body: { status: "COMMITTED", charged: { unit: "CREDITS", amount: 2 } } }]);
+    const { run: sessionStart } = await import("../hooks/session-start.mjs");
+    await sessionStart({ session_id: session }, ENV);
+    expect(fn.mock.calls[0][0]).toContain("/rsv_pending_commit/commit");
+    expect(pendingRecords(RK, stale)).toEqual([]);
   });
 
   it("NEVER releases another session's holds — a concurrent session may be mid-tool-call", async () => {
@@ -440,15 +545,19 @@ describe("post-tool-use settlement", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
-  it("clears state when the reservation was already finalized", async () => {
-    mockCycles([
-      { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_fin" } },
-      { status: 409, body: { error: "RESERVATION_FINALIZED", message: "done" } },
-    ]);
-    const call = input({ tool_use_id: "tooluse_fin" });
-    await preToolUse(call, ENV);
-    await postToolUse(call, ENV);
-    expect(pendingRecords(RK, session)).toEqual([]);
+  it("charges an event when a completed tool's reservation is finalized or missing", async () => {
+    for (const code of ["RESERVATION_FINALIZED", "NOT_FOUND"]) {
+      const fn = mockCycles([
+        { status: 200, body: { decision: "ALLOW", reservation_id: `rsv_${code}` } },
+        { status: code === "NOT_FOUND" ? 404 : 409, body: { error: code, message: "gone" } },
+        { status: 200, body: { status: "APPLIED", event_id: `evt_${code}` } },
+      ]);
+      const call = input({ tool_use_id: `tooluse_${code}` });
+      await preToolUse(call, ENV);
+      await postToolUse(call, ENV);
+      expect(fn.mock.calls[2][0]).toBe("http://cycles/v1/events");
+      expect(pendingRecords(RK, session)).toEqual([]);
+    }
   });
 });
 
@@ -526,6 +635,24 @@ describe("session-end", () => {
         "http://cycles/v1/reservations/rsv_b/release",
       ]),
     );
+    expect(pendingRecords(RK, session)).toEqual([]);
+  });
+
+  it("retries a completed tool's pending commit instead of releasing it", async () => {
+    mockCycles([
+      { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_commit_retry" } },
+      { status: 502, body: {} },
+    ]);
+    const call = input({ tool_use_id: "tooluse_commit_retry" });
+    await preToolUse(call, ENV);
+    await postToolUse(call, ENV);
+    expect(peekRecord(RK, session, toolCallKey(call))).toMatchObject({ type: "commit" });
+
+    const fn = mockCycles([
+      { status: 200, body: { status: "COMMITTED", charged: { unit: "CREDITS", amount: 1 } } },
+    ]);
+    await sessionEnd({ session_id: session }, ENV);
+    expect(fn.mock.calls[0][0]).toContain("/rsv_commit_retry/commit");
     expect(pendingRecords(RK, session)).toEqual([]);
   });
 

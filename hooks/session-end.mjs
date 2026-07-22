@@ -1,12 +1,12 @@
-// SessionEnd: settle whatever the per-call hooks could not — release open
-// holds, apply pending usage events (actions that ran but whose expired-
-// reservation charge has not been applied yet). Server-side TTL reclaims any
-// hold this misses; pending events are retried here because nothing else
-// will charge them.
+// SessionEnd: settle whatever the per-call hooks could not. Unresolved holds
+// are released; records for successfully executed actions retry commit or an
+// idempotent fallback usage event. Server-side TTL reclaims any hold this
+// misses, while executed-action records survive until charging is confirmed.
 
 import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
-import { release, createEvent, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
+import { release, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
 import { pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
+import { settleExecutedRecord } from "./lib/settlement.mjs";
 
 export async function run(input, env = process.env) {
   let config;
@@ -20,22 +20,18 @@ export async function run(input, env = process.env) {
 
   for (const [key, record] of pendingRecords(rk, input.session_id)) {
     try {
-      if (record.type === "event") {
-        await createEvent(config, {
-          idempotencyKey: `${key}_e`,
-          toolName: record.toolName,
-          amount: record.amount,
-        });
-      } else {
+      if (record.type === "hold") {
         await release(config, {
           reservationId: record.reservationId,
           idempotencyKey: `${key}_sr`,
           reason: "claude-code session ended",
         });
+        deleteReservation(rk, input.session_id, key);
+      } else {
+        await settleExecutedRecord(config, rk, input.session_id, key, record);
       }
-      deleteReservation(rk, input.session_id, key);
     } catch (err) {
-      if (record.type !== "event" && TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
+      if (record.type === "hold" && TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
         // Hold definitively gone server-side — nothing left to free. Other
         // 4xx (auth, idempotency) are correctable: keep the record.
         deleteReservation(rk, input.session_id, key);

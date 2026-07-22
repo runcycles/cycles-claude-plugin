@@ -37,17 +37,29 @@ async function post(config, path, body) {
 // malformed one). Every present field must have the correct shape, and
 // ALLOW_WITH_CAPS without a caps object is malformed by definition.
 function isStringArray(v) {
-  return Array.isArray(v) && v.every((x) => typeof x === "string");
+  return Array.isArray(v) && v.every((x) => typeof x === "string" && x.length <= 256);
 }
 
 function validateCaps(caps) {
   if (typeof caps !== "object" || caps === null || Array.isArray(caps)) {
     throw malformed(`Cycles returned ALLOW_WITH_CAPS with a malformed caps object (${JSON.stringify(caps)})`);
   }
+  const knownFields = new Set([
+    "max_tokens",
+    "max_steps_remaining",
+    "cooldown_ms",
+    "tool_allowlist",
+    "tool_denylist",
+  ]);
+  for (const field of Object.keys(caps)) {
+    if (!knownFields.has(field)) {
+      throw malformed(`Cycles caps contains an unknown field (${JSON.stringify(field)})`);
+    }
+  }
   const checks = [
-    ["max_tokens", (v) => typeof v === "number" && Number.isFinite(v)],
-    ["max_steps_remaining", (v) => typeof v === "number" && Number.isFinite(v)],
-    ["cooldown_ms", (v) => typeof v === "number" && Number.isFinite(v)],
+    ["max_tokens", (v) => Number.isInteger(v) && v >= 0],
+    ["max_steps_remaining", (v) => Number.isInteger(v) && v >= 0],
+    ["cooldown_ms", (v) => Number.isInteger(v) && v >= 0],
     ["tool_allowlist", isStringArray],
     ["tool_denylist", isStringArray],
   ];
@@ -102,6 +114,9 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
     estimate: { unit: config.unit, amount },
     ttl_ms: config.ttlMs,
   });
+  if (typeof json !== "object" || json === null || Array.isArray(json)) {
+    throw malformed(`Cycles returned a malformed reserve response (${JSON.stringify(json)})`);
+  }
   // Validate the success response: a malformed 200 must never be treated as
   // an ALLOW (and "undefined" must never become a reservation id).
   // A server that answered 200 may have created a hold regardless of how
@@ -116,11 +131,17 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
   if (!VALID_DECISIONS.has(json.decision)) {
     throw withHold(malformed(`Cycles returned a malformed reserve response (decision: ${JSON.stringify(json.decision)})`));
   }
+  if (json.decision === "DENY" && heldId !== undefined) {
+    throw withHold(malformed("Cycles returned DENY with a reservation_id"));
+  }
   if (json.decision !== "DENY" && heldId === undefined) {
     throw malformed("Cycles returned ALLOW without a reservation_id");
   }
   let caps;
-  if (json.decision === "ALLOW_WITH_CAPS" || json.caps !== undefined) {
+  if (json.decision !== "ALLOW_WITH_CAPS" && json.caps !== undefined) {
+    throw withHold(malformed(`Cycles returned caps with decision ${json.decision}`));
+  }
+  if (json.decision === "ALLOW_WITH_CAPS") {
     try {
       caps = validateCaps(json.caps);
     } catch (err) {
@@ -151,7 +172,7 @@ export async function release(config, { reservationId, idempotencyKey, reason })
   return expectStatus(json, "RELEASED", "release");
 }
 
-// Fire-and-forget usage event — the fallback charge when a reservation
+// Fallback usage event — records the charge when a reservation
 // expired before commit (long tool run / permission prompt): the action DID
 // execute, so the usage must still be recorded.
 export async function createEvent(config, { idempotencyKey, toolName, amount }) {

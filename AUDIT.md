@@ -1,6 +1,6 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
-**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–5)
+**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–7)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
 **Plugin:** `cycles-budget-guard` v0.1.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
 
@@ -8,19 +8,19 @@
 
 - **Dispatch-path enforcement:** PreToolUse reserves before every GATED tool call and denies on: server DENY; any authoritative 4xx protocol rejection (exhausted/frozen/closed budgets, debt, auth, invalid request); any MALFORMED response (unknown decision, ALLOW without reservation_id, mistyped caps fields) — integrity failures never grant execution. Fail-open (allow + warning) applies ONLY to outages: 5xx, network errors, and the 4s request timeout; `CYCLES_CC_FAIL_CLOSED=true` denies on outages too.
 - **Enforcement scope:** all tools EXCEPT the operator skip list (default: local zero-cost reads — `Read|Glob|Grep|LS|NotebookRead|TodoWrite|AskUserQuestion`; set `CYCLES_CC_SKIP_TOOLS=^$` to gate everything) and the Cycles budget tools themselves, matched by exact namespace (`^mcp__(plugin_cycles-budget-guard_)?cycles__` — lookalikes like `mcp__bicycles__*` are gated).
-- **Caps:** ALLOW_WITH_CAPS requires a validated caps object (every present field type-checked; violations are malformed → deny). `tool_allowlist`/`tool_denylist` are enforced at the gate — a violating call is blocked and its just-taken hold released (recorded for retry if the release fails). Remaining caps are surfaced to the model via `hookSpecificOutput.additionalContext` (no `permissionDecision`, so the user permission flow is untouched).
+- **Caps:** ALLOW_WITH_CAPS requires a closed-schema caps object: integer/non-negative numeric fields, ≤256-character list entries, no unknown fields, and no caps on other decisions. `tool_allowlist`/`tool_denylist` are enforced at the gate with the protocol's allowlist precedence. Violations are malformed → deny; any plausible hold is released or recorded. Remaining caps are surfaced via `hookSpecificOutput.additionalContext` without altering the user permission flow.
 - **Identity:** keys are `cc_<sha256(session_id | tool_use_id)[:32]>` — `tool_use_id` is the documented per-call unique id, so distinct identical calls charge separately and transport retries replay. Content-hash fallback exists only for Claude Code versions predating `tool_use_id` (collision limit documented there).
-- **Settlement lifecycle:** success → commit (response must confirm `COMMITTED`); tool failure → release via PostToolUseFailure (`RELEASED` confirmed); reservation expired mid-run → the executed action is still charged via a usage event (`APPLIED` confirmed), with the state record durably downgraded to `{type:"event"}` BEFORE the attempt. State (one file per record, per-session dir, typed `hold`/`event` records) is deleted only after a CONFIRMED settlement or a terminal reservation code (`RESERVATION_EXPIRED`/`RESERVATION_FINALIZED`/`NOT_FOUND`); auth/idempotency/invalid-request errors retain it everywhere (Post, Failure, SessionEnd alike).
-- **Routing-scoped state:** all state lives under a non-secret routing hash of (base URL, subject, unit), so recovery can only ever see records created under an IDENTICAL routing configuration — a machine with two projects on different Cycles servers/tenants can never charge one project's budget for the other's action.
-- **Replay points:** replayed Post hooks retry pending events; SessionEnd settles its OWN session's leftovers (holds released, events applied); SessionStart replays PENDING EVENTS from any session (idempotent charges for executed actions — safe cross-session) but NEVER releases another session's holds: a concurrent session may be mid-tool-call, and releasing its hold would let the executed tool go uncharged via RESERVATION_FINALIZED. Stranded holds are time-bounded by the reservation TTL. Reserve-time validation failures that arrive AFTER the server created a hold carry the reservation id out in the error; the hold is released immediately or recorded for retry.
-- **TTL:** configurable `CYCLES_CC_TTL_MS` (default 30 min, clamped 1s–24h) — chosen to outlive permission prompts and long tool runs.
-- **Failure posture:** unconfigured (no base URL or no subject) = fully dormant; INVALID config on an otherwise-configured setup = loud deny naming the variable; outages = fail-open by default with stderr warnings.
-- **Privacy:** only subject identifiers, tool NAMEs, unit/amount, and local hash digests leave the machine; `tool_input` is hashed locally and never transmitted.
+- **Settlement lifecycle:** state is atomically replaced and typed by lifecycle: `hold` before outcome, `commit` once the action succeeded, and `event` once a gone reservation requires fallback charging. Successful tools are NEVER released after a failed commit: Post, SessionEnd, and SessionStart retry commit, then create an idempotent event on EXPIRED/FINALIZED/NOT_FOUND. Tool failure releases only `hold` records. State is deleted only after a confirmed `COMMITTED`, `RELEASED`, or `APPLIED` response (or a terminal release result for an unexecuted hold).
+- **Routing-scoped state:** per-user temporary state lives under a non-secret routing hash of (base URL, subject, unit), so recovery can only see records created by the same OS user under an IDENTICAL routing configuration.
+- **Replay points:** replayed Post hooks, SessionEnd, and SessionStart retry `commit`/`event` records; SessionStart never releases `hold` records because another session may be mid-call. Stranded unresolved holds are time-bounded by TTL. Reserve-time validation failures carrying a plausible reservation id are released immediately or recorded for retry.
+- **TTL:** configurable `CYCLES_CC_TTL_MS` (default 30 min, validated 1s–24h) — chosen to outlive permission prompts and long tool runs.
+- **Failure posture:** unconfigured (no base URL or no subject setting) = dormant; once both are present, every invalid enforcement setting is a loud deny naming the variable; outages = fail-open by default. Once a reservation is granted, inability to persist settlement state denies and returns the hold rather than falling through to fail-open.
+- **Privacy:** only the configured API credential, subject identifiers, tool NAMEs, unit/amount, and local hash digests leave the machine; `tool_input` is hashed locally and never transmitted.
 - **Zero runtime dependencies** by policy; every network call carries a 4s deadline; LF enforced repo-wide (`.gitattributes`).
 
 ## Current verification (2026-07-22)
 
-62 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
+73 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
 
 ## History (appended review rounds; superseded statements above)
 
@@ -95,3 +95,23 @@ The review's headline was correct: the repository was not yet entitled to claim 
 1. **P1 — cross-config event replay could charge the wrong tenant/server/unit:** pending-event records carried no routing context, and SessionStart replayed them with the CURRENT session's configuration — on a machine with two projects pointing at different Cycles servers or subjects, project B would charge ITS budget for project A's action and delete A's recovery record. Fixed by namespacing ALL state under a non-secret routing hash (base URL + sorted subject + unit): records made under a different routing configuration are invisible to recovery by construction. Isolation test: a different server/tenant config sees nothing and touches nothing.
 2. **P2 — unknown-decision responses stranded their hold:** the reservation id was carried only on caps-validation errors; `{decision:"MAYBE", reservation_id:"..."}` threw without it. Every post-success validation error now carries any plausible reservation id; PreToolUse releases it or records it on release failure. Both paths tested.
 3. **P3 — stale docs:** head revision line, spec link (protocol repo + reference docs), test counts, and the PR description refreshed.
+
+---
+
+## Enforcement Review Round 6 (2026-07-22) — enforcement lifecycle and protocol conformance
+
+1. **P1 — successful actions were released after transient commit failures:** Post retained a generic hold, then SessionEnd released it, so executed work went uncharged. State now transitions to `commit` before settlement; Post, SessionEnd, and SessionStart retry it, with a durable event fallback once the reservation is gone.
+2. **P1 — local state failure fell through to fail-open:** if reserve succeeded but the state write failed, the generic outage handler allowed execution without a commit path. PreToolUse now releases the hold and denies; denied-call cleanup remains deny even if both release and local persistence fail. State writes use atomic replacement and per-user temp roots.
+3. **P1 — caps contradicted the protocol:** denylist was checked before an authoritative non-empty allowlist; floats, negatives, long strings, unknown fields, and caps on ALLOW were accepted. Validation and precedence now match the authoritative YAML.
+4. **P2 — operator settings were parsed permissively:** partial integers and mistyped fail-closed values could silently weaken enforcement. Base URL, subject charset, unit, cost, TTL, skip regex, and fail mode are now strictly validated with named deny messages.
+5. **P2 — finalized/missing reservations after successful execution were discarded:** Post deleted state without recording usage. Stable commit retries now fall back to an idempotent event for EXPIRED, FINALIZED, and NOT_FOUND.
+
+---
+
+## Enforcement Review Round 7 (2026-07-22) — recovery and integration edges
+
+1. **P1 — interrupted atomic writes could be replayed as usage:** a crash after writing the temporary JSON but before rename left a dot-prefixed temp file that recovery treated as a real record with a new idempotency key. Recovery now ignores atomic-write temp files.
+2. **P1 — a JSON `null` reserve response failed open:** dereferencing the body threw an untyped exception, so a malformed success response was mistaken for an outage. Non-object success bodies are now explicit malformed-response denials.
+3. **P2 — URL validation and use could diverge:** the WHATWG parser accepted canonicalizable spellings while requests retained the raw spelling. Base URLs are now whitespace-strict and use the parser's canonical representation.
+4. **P2 — hook commands used shell form despite path placeholders:** all handlers now use Claude Code's documented exec form (`command` + `args`), avoiding shell parsing across platforms and install paths.
+5. **P3 — CI/action and privacy wording:** the pinned `setup-node` SHA is v7.0.0 (the stale v6 comment is corrected), and the privacy inventory now explicitly includes the configured API credential.

@@ -6,11 +6,11 @@
 
 ## What it does
 
-- **PreToolUse** — reserves a flat per-call cost before each gated tool call. Any authoritative Cycles rejection — DENY, budget exhausted/frozen/closed, debt, auth failure, invalid request — blocks the call with a reason the model sees; fail-open applies ONLY to outages (5xx/network/timeout). `ALLOW_WITH_CAPS` tool allow/denylists are enforced (violating calls are blocked and the hold returned); other caps are surfaced to the transcript. Idempotency keys derive from `tool_use_id` (unique per call), so transport retries never double-reserve — this is the layer that *can* hold a key stable, unlike a stateless MCP server.
-- **PostToolUse** (success) — commits the reservation; if it expired mid-run (long tool, permission prompt), usage is still charged via a fallback event. Injects a low-budget warning into the model's context under 15% remaining.
+- **PreToolUse** — reserves a flat per-call cost before each gated tool call. Any authoritative Cycles rejection — DENY, budget exhausted/frozen/closed, debt, auth failure, invalid request — blocks the call with a reason the model sees; fail-open applies ONLY to outages (5xx/network/timeout). `ALLOW_WITH_CAPS` is validated against the protocol and tool allow/denylists are enforced with allowlist precedence; other caps are surfaced to the transcript. A granted call is denied and its hold returned if durable local settlement state cannot be written. Idempotency keys derive from `tool_use_id` (unique per call), so transport retries never double-reserve.
+- **PostToolUse** (success) — durably marks the action as executed, then commits the reservation. Transient failures remain pending commits and are retried; if the reservation expired, disappeared, or was finalized, usage is charged via an idempotent fallback event. Injects a low-budget warning into the model's context under 15% remaining.
 - **PostToolUseFailure** — releases the hold when the tool call failed: failed attempts return budget instead of charging it.
-- **SessionEnd** — settles anything the per-call hooks could not: releases open holds, applies pending usage events. State survives failed settlements.
-- **SessionStart** — replays pending usage-event charges from any prior session (idempotent, so safe). It deliberately never releases another session's holds — concurrent sessions are normal, and stranded holds are already time-bounded by the reservation TTL.
+- **SessionEnd** — settles anything the per-call hooks could not: releases unresolved holds, retries pending commits, and applies pending usage events. State survives failed settlements.
+- **SessionStart** — replays pending commits and usage-event charges from any session with the same server/subject/unit routing identity. It deliberately never releases holds — concurrent sessions are normal, and stranded holds are already time-bounded by the reservation TTL.
 - **Companion MCP server** — the `@runcycles/mcp-server` toolset (balances, explicit reserves, usage events), **pinned to an exact version** and fetched via npx on first run (not vendored into this repo).
 - **`/cycles-budget-guard:budget`** — one-command budget status report.
 
@@ -36,13 +36,14 @@ If `CYCLES_BASE_URL` or a subject default is missing, the plugin stays dormant (
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CYCLES_CC_UNIT` | `CREDITS` | Unit charged per tool call |
-| `CYCLES_CC_COST` | `1` | Flat cost reserved+committed per tool call |
+| `CYCLES_CC_UNIT` | `CREDITS` | `USD_MICROCENTS`, `TOKENS`, `CREDITS`, or `RISK_POINTS` |
+| `CYCLES_CC_COST` | `1` | Positive integer cost reserved+committed per tool call |
 | `CYCLES_CC_SKIP_TOOLS` | `^(Read\|Glob\|Grep\|LS\|NotebookRead\|TodoWrite\|AskUserQuestion)$` | Regex of tool names never gated (default: local zero-cost reads) |
 | `CYCLES_CC_FAIL_CLOSED` | `false` | `true` blocks tool calls when the Cycles server is unreachable |
 | `CYCLES_CC_TTL_MS` | `1800000` (30 min) | Reservation TTL; must outlive permission prompts and long tool runs |
 
 Cycles' own budget tools are never gated (recursion guard), regardless of `CYCLES_CC_SKIP_TOOLS`.
+Once both a base URL and subject setting opt into enforcement, invalid URLs, subjects, units, costs, TTLs, regular expressions, or fail-mode values deny with a named configuration error; they are never treated as outages.
 
 ## Semantics worth knowing
 
@@ -53,7 +54,7 @@ Cycles' own budget tools are never gated (recursion guard), regardless of `CYCLE
 
 ## Privacy
 
-The hooks send only: your configured subject identifiers, the tool *name*, unit and amount, and derived opaque hashes. **Tool arguments, file contents, and prompts are never sent** — the hash of `tool_input` is computed locally and only the digest leaves the machine as part of the idempotency key. Full policy: https://runcycles.io/privacy
+The hooks send only: your configured API credential and subject identifiers, the tool *name*, unit and amount, and derived opaque hashes. **Tool arguments, file contents, and prompts are never sent** — the hash of `tool_input` is computed locally and only the digest leaves the machine as part of the idempotency key. Full policy: https://runcycles.io/privacy
 
 ## License
 

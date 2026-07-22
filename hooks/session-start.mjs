@@ -1,6 +1,6 @@
-// SessionStart: deterministic replay point for PENDING USAGE EVENTS —
-// charges for actions that already executed but whose event application
-// failed. Events are idempotent and safe to apply from any session,
+// SessionStart: deterministic replay point for executed actions whose commit
+// or fallback usage event has not settled. Both operations are idempotent and
+// safe to retry from any session under the same routing configuration,
 // including the current one on resume.
 //
 // Deliberately NEVER touches hold records: another session may be alive and
@@ -10,8 +10,8 @@
 // and the owning session's own SessionEnd releases them sooner.
 
 import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
-import { createEvent } from "./lib/cycles-client.mjs";
-import { allSessions, pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
+import { allSessions, pendingRecords, clearStateIfEmpty } from "./lib/state.mjs";
+import { settleExecutedRecord } from "./lib/settlement.mjs";
 
 export async function run(input, env = process.env) {
   let config;
@@ -25,16 +25,11 @@ export async function run(input, env = process.env) {
 
   for (const sessionId of allSessions(rk)) {
     for (const [key, record] of pendingRecords(rk, sessionId)) {
-      if (record.type !== "event") continue; // holds belong to their session + TTL
+      if (record.type === "hold") continue; // unresolved tool outcome belongs to its session + TTL
       try {
-        await createEvent(config, {
-          idempotencyKey: `${key}_e`,
-          toolName: record.toolName,
-          amount: record.amount,
-        });
-        deleteReservation(rk, sessionId, key);
+        await settleExecutedRecord(config, rk, sessionId, key, record);
       } catch (err) {
-        process.stderr.write(`cycles-plugin: session-start event recovery failed for ${sessionId}/${key}: ${err.message}\n`);
+        process.stderr.write(`cycles-plugin: session-start executed-action recovery failed for ${sessionId}/${key}: ${err.message}\n`);
       }
     }
     clearStateIfEmpty(rk, sessionId);

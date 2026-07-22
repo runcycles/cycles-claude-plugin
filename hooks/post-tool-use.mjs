@@ -1,13 +1,13 @@
 // PostToolUse (fires on tool SUCCESS): commit the reservation made in
 // PreToolUse. State is only deleted once the hold is actually settled —
-// a transient commit failure keeps the record so SessionEnd can release it.
-// If the reservation expired mid-run (long tool / permission prompt), the
-// action still executed, so usage is charged via a fallback event.
+// a transient commit failure becomes a typed pending-commit record that
+// SessionEnd/SessionStart retry. If the reservation is gone, the action still
+// executed, so usage is charged via an idempotent fallback event.
 
 import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
-import { commit, createEvent } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
-import { peekRecord, deleteReservation, writeRecord } from "./lib/state.mjs";
+import { peekRecord, writeRecord } from "./lib/state.mjs";
+import { settleExecutedRecord } from "./lib/settlement.mjs";
 import { CYCLES_TOOL_NS } from "./pre-tool-use.mjs";
 
 const LOW_BUDGET_THRESHOLD = 0.15;
@@ -41,53 +41,32 @@ export async function run(input, env = process.env) {
   const record = peekRecord(rk, input.session_id, key);
   if (!record) return; // reserve was denied, failed open, or dry
 
-  if (record.type === "event") {
-    // A previous settlement attempt already downgraded this to a pending
-    // usage event — retry applying it.
+  // The tool has succeeded. Persist that fact BEFORE settlement so SessionEnd
+  // and SessionStart retry commit/event rather than releasing the hold.
+  const executed = record.type === "hold"
+    ? { type: "commit", reservationId: record.reservationId, toolName, amount: config.cost }
+    : record;
+  if (record.type === "hold") {
     try {
-      await createEvent(config, { idempotencyKey: `${key}_e`, toolName: record.toolName, amount: record.amount });
-      deleteReservation(rk, input.session_id, key);
+      writeRecord(rk, input.session_id, key, executed);
     } catch (err) {
-      process.stderr.write(`cycles-plugin: pending usage event retry failed: ${err.message}\n`);
+      // The action already ran, so settlement must still be attempted now.
+      // Atomic writes preserve the old hold record if replacement failed.
+      process.stderr.write(`cycles-plugin: could not persist pending commit for ${record.reservationId}: ${err.message}\n`);
     }
-    return;
   }
 
   try {
-    const result = await commit(config, {
-      reservationId: record.reservationId,
-      idempotencyKey: `${key}_c`,
-      amount: config.cost,
-    });
-    deleteReservation(rk, input.session_id, key);
-    const hint = lowBudgetHint(result.balances);
+    const settled = await settleExecutedRecord(config, rk, input.session_id, key, executed);
+    const hint = settled.kind === "commit" ? lowBudgetHint(settled.result.balances) : undefined;
     if (hint) {
       process.stdout.write(
         JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: hint } }),
       );
     }
   } catch (err) {
-    if (err?.errorCode === "RESERVATION_EXPIRED") {
-      // The hold lapsed but the tool DID run — the usage MUST be charged.
-      // Durably downgrade the record to a pending event FIRST, so a failed
-      // event application is retried (post replay or session end) instead of
-      // the charge being lost forever.
-      writeRecord(rk, input.session_id, key, { type: "event", toolName, amount: config.cost });
-      try {
-        await createEvent(config, { idempotencyKey: `${key}_e`, toolName, amount: config.cost });
-        deleteReservation(rk, input.session_id, key);
-      } catch (eventErr) {
-        process.stderr.write(`cycles-plugin: expired-reservation event fallback failed (kept pending): ${eventErr.message}\n`);
-      }
-      return;
-    }
-    if (err?.errorCode === "RESERVATION_FINALIZED") {
-      // Already settled (e.g. a replayed hook) — nothing left to hold.
-      deleteReservation(rk, input.session_id, key);
-      return;
-    }
-    // Transient or malformed: keep the record so SessionEnd settles it.
-    process.stderr.write(`cycles-plugin: commit failed for ${record.reservationId} (will settle at session end): ${err.message}\n`);
+    const stateDetail = err?.stateError ? `; state persistence also failed: ${err.stateError.message}` : "";
+    process.stderr.write(`cycles-plugin: executed-action settlement failed for ${executed.reservationId ?? key} (kept pending): ${err.message}${stateDetail}\n`);
   }
 }
 

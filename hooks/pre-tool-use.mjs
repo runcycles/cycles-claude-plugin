@@ -10,8 +10,14 @@ import { rememberReservation } from "./lib/state.mjs";
 
 // Exact namespaces of the Cycles budget tools (recursion guard). Deliberately
 // NOT a substring match: `mcp__bicycles__deploy` must be gated like any other
-// tool. Covers the plugin-bundled server and a user-configured `cycles` server.
+// tool. Covers the plugin companion server and a user-configured `cycles` server.
 export const CYCLES_TOOL_NS = /^mcp__(plugin_cycles-budget-guard_)?cycles__/;
+const SUBJECT_ENV_KEYS = ["TENANT", "WORKSPACE", "APP", "WORKFLOW", "AGENT", "TOOLSET"]
+  .map((field) => `CYCLES_DEFAULT_${field}`);
+
+function hasSubjectSetting(env) {
+  return SUBJECT_ENV_KEYS.some((key) => env[key] !== undefined && env[key] !== "");
+}
 
 function output(decision, reason) {
   const hookSpecificOutput = {
@@ -24,11 +30,14 @@ function output(decision, reason) {
 
 function capViolation(caps, toolName) {
   if (!caps) return undefined;
-  if (Array.isArray(caps.toolDenylist) && caps.toolDenylist.includes(toolName)) {
-    return `tool ${toolName} is on the Cycles tool_denylist`;
-  }
   if (Array.isArray(caps.toolAllowlist) && caps.toolAllowlist.length > 0 && !caps.toolAllowlist.includes(toolName)) {
     return `tool ${toolName} is not on the Cycles tool_allowlist`;
+  }
+  // Protocol precedence: a non-empty allowlist is authoritative and the
+  // denylist is ignored. This matters when a tool appears in both lists.
+  if ((!Array.isArray(caps.toolAllowlist) || caps.toolAllowlist.length === 0) &&
+      Array.isArray(caps.toolDenylist) && caps.toolDenylist.includes(toolName)) {
+    return `tool ${toolName} is on the Cycles tool_denylist`;
   }
   return undefined;
 }
@@ -41,6 +50,14 @@ function capsSummary(caps) {
   return parts.join(", ");
 }
 
+function rememberBestEffort(routing, sessionId, key, reservationId) {
+  try {
+    rememberReservation(routing, sessionId, key, reservationId);
+  } catch (err) {
+    process.stderr.write(`cycles-plugin: could not persist denied-call hold ${reservationId}: ${err.message}\n`);
+  }
+}
+
 export async function run(input, env = process.env) {
   let config;
   try {
@@ -50,7 +67,7 @@ export async function run(input, env = process.env) {
     // rather than silently unenforced. With no base URL at all the plugin
     // would be dormant anyway — a stray bad default must not block a setup
     // that never opted into enforcement.
-    if (!env.CYCLES_BASE_URL) return;
+    if (!env.CYCLES_BASE_URL || !hasSubjectSetting(env)) return;
     output("deny", `Cycles plugin misconfigured: ${err.message}`);
     return;
   }
@@ -88,12 +105,29 @@ export async function run(input, env = process.env) {
           reason: "denied by caps",
         });
       } catch {
-        rememberReservation(rk, input.session_id, key, result.reservationId);
+        rememberBestEffort(rk, input.session_id, key, result.reservationId);
       }
       output("deny", `Cycles caps forbid this call: ${violation}. Respect the caps or choose an allowed tool.`);
       return;
     }
-    rememberReservation(rk, input.session_id, key, result.reservationId);
+    try {
+      rememberReservation(rk, input.session_id, key, result.reservationId);
+    } catch (stateErr) {
+      // Once reserve succeeds, durable local state is part of enforcement.
+      // Never let a disk/permission failure fall through to fail-open: return
+      // the hold if possible and deny because PostToolUse could not pair it.
+      try {
+        await release(config, {
+          reservationId: result.reservationId,
+          idempotencyKey: `${key}_r`,
+          reason: "local enforcement state unavailable",
+        });
+      } catch {
+        // The server TTL is the only remaining recovery path.
+      }
+      output("deny", `Cycles enforcement state unavailable: ${stateErr.message}`);
+      return;
+    }
     if (result.decision === "ALLOW_WITH_CAPS" && result.caps) {
       const summary = capsSummary(result.caps);
       if (summary) {
@@ -125,7 +159,7 @@ export async function run(input, env = process.env) {
             reason: "malformed reserve response",
           });
         } catch {
-          rememberReservation(rk, input.session_id, key, err.reservationId);
+          rememberBestEffort(rk, input.session_id, key, err.reservationId);
         }
       }
       output(
