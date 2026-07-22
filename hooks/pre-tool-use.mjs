@@ -3,10 +3,25 @@
 // skip it. This is the non-bypassable enforcement the MCP server alone
 // cannot provide (see the server README's Security Model section).
 
-import { loadConfig, isConfigured } from "./lib/config.mjs";
-import { reserve } from "./lib/cycles-client.mjs";
+import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
+import { reserve, release } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
 import { rememberReservation } from "./lib/state.mjs";
+
+// Exact namespaces of the Cycles budget tools (recursion guard). Deliberately
+// NOT a substring match: `mcp__bicycles__deploy` must be gated like any other
+// tool. Covers the plugin companion server and a user-configured `cycles` server.
+export const CYCLES_TOOL_NS = /^mcp__(plugin_cycles-budget-guard_)?cycles__/;
+const SUBJECT_ENV_KEYS = ["TENANT", "WORKSPACE", "APP", "WORKFLOW", "AGENT", "TOOLSET"]
+  .map((field) => `CYCLES_DEFAULT_${field}`);
+
+function hasSubjectSetting(env) {
+  return SUBJECT_ENV_KEYS.some((key) => env[key] !== undefined && env[key] !== "");
+}
+
+function enforcementOptedIn(env) {
+  return Boolean(env.CYCLES_BASE_URL) && hasSubjectSetting(env);
+}
 
 function output(decision, reason) {
   const hookSpecificOutput = {
@@ -15,6 +30,36 @@ function output(decision, reason) {
   };
   if (reason !== undefined) hookSpecificOutput.permissionDecisionReason = reason;
   process.stdout.write(JSON.stringify({ hookSpecificOutput }));
+}
+
+function capViolation(caps, toolName) {
+  if (!caps) return undefined;
+  if (Array.isArray(caps.toolAllowlist) && caps.toolAllowlist.length > 0 && !caps.toolAllowlist.includes(toolName)) {
+    return `tool ${toolName} is not on the Cycles tool_allowlist`;
+  }
+  // Protocol precedence: a non-empty allowlist is authoritative and the
+  // denylist is ignored. This matters when a tool appears in both lists.
+  if ((!Array.isArray(caps.toolAllowlist) || caps.toolAllowlist.length === 0) &&
+      Array.isArray(caps.toolDenylist) && caps.toolDenylist.includes(toolName)) {
+    return `tool ${toolName} is on the Cycles tool_denylist`;
+  }
+  return undefined;
+}
+
+function capsSummary(caps) {
+  const parts = [];
+  if (typeof caps.maxTokens === "number") parts.push(`maxTokens=${caps.maxTokens}`);
+  if (typeof caps.maxStepsRemaining === "number") parts.push(`maxStepsRemaining=${caps.maxStepsRemaining}`);
+  if (typeof caps.cooldownMs === "number") parts.push(`cooldownMs=${caps.cooldownMs}`);
+  return parts.join(", ");
+}
+
+function rememberBestEffort(routing, sessionId, key, reservationId) {
+  try {
+    rememberReservation(routing, sessionId, key, reservationId);
+  } catch (err) {
+    process.stderr.write(`cycles-plugin: could not persist denied-call hold ${reservationId}: ${err.message}\n`);
+  }
 }
 
 export async function run(input, env = process.env) {
@@ -26,18 +71,23 @@ export async function run(input, env = process.env) {
     // rather than silently unenforced. With no base URL at all the plugin
     // would be dormant anyway — a stray bad default must not block a setup
     // that never opted into enforcement.
-    if (!env.CYCLES_BASE_URL) return;
+    if (!enforcementOptedIn(env)) return;
     output("deny", `Cycles plugin misconfigured: ${err.message}`);
     return;
   }
 
   if (!isConfigured(config)) return; // not set up — normal permission flow
+  if (typeof input !== "object" || input === null || Array.isArray(input) ||
+      typeof input.session_id !== "string" || input.session_id === "" ||
+      typeof input.tool_name !== "string" || input.tool_name === "") {
+    output("deny", "Cycles enforcement received malformed hook input; the tool call is blocked.");
+    return;
+  }
   const toolName = String(input.tool_name ?? "");
-  // Never gate the Cycles budget tools themselves (recursion guard), nor
-  // operator-excluded tools.
-  if (/cycles/i.test(toolName) || config.skipTools.test(toolName)) return;
+  if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
+  const rk = routingKey(config);
   try {
     const result = await reserve(config, {
       idempotencyKey: key,
@@ -51,25 +101,92 @@ export async function run(input, env = process.env) {
       );
       return;
     }
-    rememberReservation(input.session_id, key, result.reservationId);
-    // ALLOW / ALLOW_WITH_CAPS: let the normal permission flow continue.
+    // ALLOW_WITH_CAPS: enforce tool allow/deny lists here (the one cap this
+    // layer can enforce mechanically); surface the rest to the transcript.
+    const violation = capViolation(result.caps, toolName);
+    if (violation) {
+      // Return the hold we just took before blocking the call; if the
+      // release fails, RECORD the hold so SessionEnd can retry — a failed
+      // best-effort release must not leak budget until TTL.
+      try {
+        await release(config, {
+          reservationId: result.reservationId,
+          idempotencyKey: `${key}_r`,
+          reason: "denied by caps",
+        });
+      } catch {
+        rememberBestEffort(rk, input.session_id, key, result.reservationId);
+      }
+      output("deny", `Cycles caps forbid this call: ${violation}. Respect the caps or choose an allowed tool.`);
+      return;
+    }
+    try {
+      rememberReservation(rk, input.session_id, key, result.reservationId);
+    } catch (stateErr) {
+      // Once reserve succeeds, durable local state is part of enforcement.
+      // Never let a disk/permission failure fall through to fail-open: return
+      // the hold if possible and deny because PostToolUse could not pair it.
+      try {
+        await release(config, {
+          reservationId: result.reservationId,
+          idempotencyKey: `${key}_r`,
+          reason: "local enforcement state unavailable",
+        });
+      } catch {
+        // The server TTL is the only remaining recovery path.
+      }
+      output("deny", `Cycles enforcement state unavailable: ${stateErr.message}`);
+      return;
+    }
+    if (result.decision === "ALLOW_WITH_CAPS" && result.caps) {
+      const summary = capsSummary(result.caps);
+      if (summary) {
+        // additionalContext is the documented channel for informing the
+        // model; stderr is not transcript context.
+        process.stdout.write(
+          JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              additionalContext: `Cycles ALLOW_WITH_CAPS — respect ${summary} while executing.`,
+            },
+          }),
+        );
+      }
+    }
   } catch (err) {
-    if (err?.errorCode === "BUDGET_EXCEEDED") {
+    // An authoritative protocol rejection (4xx envelope: budget exhausted /
+    // frozen / closed, debt, auth failure, invalid request) is the server
+    // saying NO — never fail open on it.
+    if (err?.authoritative || err?.malformed) {
+      // A malformed response can arrive AFTER the server created a hold
+      // (e.g. valid reservation_id, garbage caps). Never strand it: try to
+      // release, and record it for session-end retry if the release fails.
+      if (typeof err.reservationId === "string" && err.reservationId !== "") {
+        try {
+          await release(config, {
+            reservationId: err.reservationId,
+            idempotencyKey: `${key}_r`,
+            reason: "malformed reserve response",
+          });
+        } catch {
+          rememberBestEffort(rk, input.session_id, key, err.reservationId);
+        }
+      }
       output(
         "deny",
-        `Cycles budget EXHAUSTED for ${toolName}. Do not retry; reduce scope or stop and report the budget limit.`,
+        `Cycles rejected ${toolName}: ${err.errorCode} — ${err.message}. Do not retry; resolve the budget/authorization state or stop.`,
       );
       return;
     }
     if (config.failClosed) {
-      output("deny", `Cycles server unreachable and CYCLES_CC_FAIL_CLOSED=true: ${err.message}`);
+      output("deny", `Cycles server unavailable and CYCLES_CC_FAIL_CLOSED=true: ${err.message}`);
       return;
     }
     process.stderr.write(`cycles-plugin: reserve failed (allowing, fail-open): ${err.message}\n`);
   }
 }
 
-/* v8 ignore start -- process-level entry, covered by integration run */
+/* v8 ignore start -- process-level entry, covered by tests/e2e.test.mjs */
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop())) {
   const raw = await new Promise((resolve) => {
     let data = "";
@@ -80,6 +197,9 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
     await run(JSON.parse(raw));
   } catch (err) {
     process.stderr.write(`cycles-plugin: ${err?.message ?? err}\n`);
+    // Exit 2 is Claude Code's documented blocking-error path for PreToolUse.
+    // A configured guard must never turn malformed stdin into a silent allow.
+    if (enforcementOptedIn(process.env)) process.exitCode = 2;
   }
 }
 /* v8 ignore stop */

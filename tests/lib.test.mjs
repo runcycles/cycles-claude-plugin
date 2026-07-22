@@ -3,8 +3,10 @@ import { loadConfig, isConfigured } from "../hooks/lib/config.mjs";
 import { reserve, commit, release } from "../hooks/lib/cycles-client.mjs";
 import {
   rememberReservation,
-  takeReservation,
-  pendingReservations,
+  writeRecord,
+  peekRecord,
+  deleteReservation,
+  pendingRecords,
   clearState,
 } from "../hooks/lib/state.mjs";
 
@@ -32,6 +34,14 @@ describe("loadConfig", () => {
   it("rejects invalid subject defaults", () => {
     expect(() => loadConfig({ CYCLES_DEFAULT_TENANT: "   " })).toThrow("CYCLES_DEFAULT_TENANT");
     expect(() => loadConfig({ CYCLES_DEFAULT_APP: "x".repeat(129) })).toThrow("CYCLES_DEFAULT_APP");
+    expect(() => loadConfig({ CYCLES_DEFAULT_TENANT: "acme/prod" })).toThrow("CYCLES_DEFAULT_TENANT");
+  });
+
+  it("rejects invalid or unsafe base URLs", () => {
+    for (const value of ["cycles.local", "ftp://cycles.local", "https://user:pass@cycles.local", "https://cycles.local/?x=1", " https://cycles.local"]) {
+      expect(() => loadConfig({ CYCLES_BASE_URL: value }), value).toThrow("CYCLES_BASE_URL");
+    }
+    expect(loadConfig({ CYCLES_BASE_URL: "HTTPS://CYCLES.LOCAL:443/" }).baseUrl).toBe("https://cycles.local");
   });
 
   it("parses cost, fail mode and skip pattern", () => {
@@ -58,9 +68,16 @@ describe("loadConfig", () => {
     }
   });
 
-  it("falls back to cost 1 on garbage", () => {
-    expect(loadConfig({ CYCLES_CC_COST: "banana" }).cost).toBe(1);
-    expect(loadConfig({ CYCLES_CC_COST: "-3" }).cost).toBe(1);
+  it("rejects ambiguous or out-of-range enforcement settings", () => {
+    for (const value of ["banana", "1oops", "1.5", "-3", "0"]) {
+      expect(() => loadConfig({ CYCLES_CC_COST: value }), value).toThrow("CYCLES_CC_COST");
+    }
+    expect(() => loadConfig({ CYCLES_CC_TTL_MS: "999" })).toThrow("CYCLES_CC_TTL_MS");
+    expect(() => loadConfig({ CYCLES_CC_TTL_MS: "1000oops" })).toThrow("CYCLES_CC_TTL_MS");
+    expect(() => loadConfig({ CYCLES_CC_UNIT: "DOLLARS" })).toThrow("CYCLES_CC_UNIT");
+    expect(() => loadConfig({ CYCLES_CC_SKIP_TOOLS: "[" })).toThrow("CYCLES_CC_SKIP_TOOLS");
+    expect(() => loadConfig({ CYCLES_CC_FAIL_CLOSED: "yes" })).toThrow("CYCLES_CC_FAIL_CLOSED");
+    expect(loadConfig({ CYCLES_CC_FAIL_CLOSED: "TRUE" }).failClosed).toBe(true);
   });
 });
 
@@ -114,9 +131,36 @@ describe("cycles-client", () => {
     const fn = mockFetch(200, { status: "COMMITTED" });
     await commit(config, { reservationId: "rsv 1", idempotencyKey: "k2", amount: 1 });
     expect(fn.mock.calls[0][0]).toBe("http://cycles/v1/reservations/rsv%201/commit");
+    mockFetch(200, { status: "RELEASED" });
     await release(config, { reservationId: "rsv_2", idempotencyKey: "k3", reason: "skipped" });
-    expect(fn.mock.calls[1][0]).toBe("http://cycles/v1/reservations/rsv_2/release");
-    expect(JSON.parse(fn.mock.calls[1][1].body)).toMatchObject({ idempotency_key: "k3", reason: "skipped" });
+  });
+
+  it("rejects settlement responses that do not confirm the expected status", async () => {
+    mockFetch(200, { status: "PENDING" });
+    await expect(commit(config, { reservationId: "r", idempotencyKey: "k", amount: 1 })).rejects.toMatchObject({
+      errorCode: "MALFORMED_RESPONSE",
+      malformed: true,
+    });
+    mockFetch(200, {});
+    await expect(release(config, { reservationId: "r", idempotencyKey: "k" })).rejects.toMatchObject({
+      malformed: true,
+    });
+  });
+
+  it("marks malformed reserve responses with the malformed flag", async () => {
+    mockFetch(200, { decision: "ALLOW" });
+    await expect(reserve(config, { idempotencyKey: "k", toolName: "B", amount: 1 })).rejects.toMatchObject({
+      errorCode: "MALFORMED_RESPONSE",
+      malformed: true,
+    });
+  });
+
+  it("treats a null success body as malformed instead of an outage", async () => {
+    mockFetch(200, null);
+    await expect(reserve(config, { idempotencyKey: "k", toolName: "B", amount: 1 })).rejects.toMatchObject({
+      errorCode: "MALFORMED_RESPONSE",
+      malformed: true,
+    });
   });
 
   it("tolerates non-JSON error bodies", async () => {
@@ -126,23 +170,56 @@ describe("cycles-client", () => {
 });
 
 describe("state", () => {
+  const RK = "rk-test";
   const session = `test-${process.pid}-${Math.random().toString(36).slice(2)}`;
 
-  it("round-trips reservations by tool_use_id", () => {
-    rememberReservation(session, "tu_1", "rsv_1");
-    rememberReservation(session, "tu_2", "rsv_2");
-    expect(pendingReservations(session)).toHaveLength(2);
-    expect(takeReservation(session, "tu_1")).toBe("rsv_1");
-    expect(takeReservation(session, "tu_1")).toBeUndefined();
-    expect(pendingReservations(session)).toEqual([["tu_2", "rsv_2"]]);
-    clearState(session);
-    expect(pendingReservations(session)).toEqual([]);
+  it("round-trips typed records", () => {
+    rememberReservation(RK, session, "tu_1", "rsv_1");
+    writeRecord(RK, session, "tu_2", { type: "event", toolName: "Bash", amount: 3 });
+    expect(pendingRecords(RK, session)).toHaveLength(2);
+    expect(peekRecord(RK, session, "tu_1")).toEqual({ type: "hold", reservationId: "rsv_1" });
+    expect(peekRecord(RK, session, "tu_1")).toBeDefined(); // peek does not consume
+    writeRecord(RK, session, "tu_1", { type: "commit", reservationId: "rsv_1", toolName: "Bash", amount: 1 });
+    expect(peekRecord(RK, session, "tu_1")).toMatchObject({ type: "commit", amount: 1 });
+    deleteReservation(RK, session, "tu_1");
+    expect(peekRecord(RK, session, "tu_1")).toBeUndefined();
+    expect(pendingRecords(RK, session)).toEqual([["tu_2", { type: "event", toolName: "Bash", amount: 3 }]]);
+    clearState(RK, session);
+    expect(pendingRecords(RK, session)).toEqual([]);
+  });
+
+  it("skips corrupt record files", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const userScope = typeof process.getuid === "function" ? `uid-${process.getuid()}` : "user";
+    const dir = join(tmpdir(), `cycles-claude-plugin-${userScope}`, RK, session);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "corrupt"), "not json{");
+    rememberReservation(RK, session, "tu_ok", "rsv_ok");
+    const records = pendingRecords(RK, session);
+    expect(records).toHaveLength(1);
+    expect(records[0][0]).toBe("tu_ok");
+    clearState(RK, session);
+  });
+
+  it("ignores interrupted atomic-write temp files during recovery", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const userScope = typeof process.getuid === "function" ? `uid-${process.getuid()}` : "user";
+    const dir = join(tmpdir(), `cycles-claude-plugin-${userScope}`, RK, session);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".tu_interrupted.123.uuid.tmp"), JSON.stringify({ type: "event", toolName: "Bash", amount: 99 }));
+    rememberReservation(RK, session, "tu_real", "rsv_real");
+    expect(pendingRecords(RK, session)).toEqual([["tu_real", { type: "hold", reservationId: "rsv_real" }]]);
+    clearState(RK, session);
   });
 
   it("sanitizes hostile session ids", () => {
     const hostile = "../../etc/passwd";
-    rememberReservation(hostile, "tu", "rsv");
-    expect(takeReservation(hostile, "tu")).toBe("rsv");
-    clearState(hostile);
+    rememberReservation(RK, hostile, "tu", "rsv");
+    expect(peekRecord(RK, hostile, "tu")).toEqual({ type: "hold", reservationId: "rsv" });
+    clearState(RK, hostile);
   });
 });

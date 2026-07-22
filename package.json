@@ -11,12 +11,12 @@
     "url": "git+https://github.com/runcycles/cycles-claude-plugin.git"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint hooks/"
+    "lint": "eslint hooks/ tests/ eslint.config.js vitest.config.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

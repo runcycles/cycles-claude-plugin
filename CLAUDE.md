@@ -11,7 +11,7 @@
 - maintain at least 95% or higher test coverage (enforced by vitest.config.js thresholds)
 
 # This repo
-Claude Code plugin (hooks + bundled MCP server). Plain ESM JavaScript, zero
+Claude Code plugin (hooks + pinned companion MCP server). Plain ESM JavaScript, zero
 runtime dependencies — keep it that way; the auditable-in-one-sitting size is
 a feature. There is NO build or typecheck step.
 
@@ -24,4 +24,4 @@ Hook contract facts (from code.claude.com/docs): PreToolUse deny =
 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`
 on exit 0; hooks run synchronously in tool dispatch — every network call MUST
 carry a timeout; PreToolUse/PostToolUse share no process — state goes through
-hooks/lib/state.mjs (one file per reservation, atomic per-key).
+hooks/lib/state.mjs (one atomically replaced file per reservation key).
