@@ -10,7 +10,7 @@
 - **PostToolUse** (success) — commits the reservation; if it expired mid-run (long tool, permission prompt), usage is still charged via a fallback event. Injects a low-budget warning into the model's context under 15% remaining.
 - **PostToolUseFailure** — releases the hold when the tool call failed: failed attempts return budget instead of charging it.
 - **SessionEnd** — settles anything the per-call hooks could not: releases open holds, applies pending usage events. State survives failed settlements.
-- **SessionStart** — recovery sweep for records left by crashed or never-resumed sessions, so an executed action's pending charge always has a deterministic replay point.
+- **SessionStart** — replays pending usage-event charges from any prior session (idempotent, so safe). It deliberately never releases another session's holds — concurrent sessions are normal, and stranded holds are already time-bounded by the reservation TTL.
 - **Companion MCP server** — the `@runcycles/mcp-server` toolset (balances, explicit reserves, usage events), **pinned to an exact version** and fetched via npx on first run (not vendored into this repo).
 - **`/cycles-budget-guard:budget`** — one-command budget status report.
 

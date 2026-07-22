@@ -271,58 +271,69 @@ describe("caps validation (malformed caps never bypass)", () => {
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("denies when a caps field is mistyped — a string denylist is not a missing cap", async () => {
-    mockCycles([
+  it("denies on mistyped caps AND releases the hold the server already created", async () => {
+    const fn = mockCycles([
       { status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: "rsv_mc", caps: { tool_denylist: "Bash" } } },
+      { status: 200, body: { status: "RELEASED" } },
     ]);
     await preToolUse(input(), ENV);
     const out = JSON.parse(written());
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("tool_denylist");
+    expect(fn.mock.calls[1][0]).toContain("/rsv_mc/release");
     expect(pendingRecords(session)).toEqual([]);
+  });
 
-    stdout.mockClear();
+  it("records the stranded hold when its release also fails", async () => {
     mockCycles([
       { status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: "rsv_mt2", caps: { max_tokens: "500" } } },
+      { status: 502, body: {} },
     ]);
-    await preToolUse(input(), ENV);
+    const call = input({ tool_use_id: "tooluse_strand" });
+    await preToolUse(call, ENV);
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(peekRecord(session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_mt2" });
   });
 });
 
-describe("session-start recovery", () => {
-  it("sweeps stale sessions: applies pending events, releases holds, keeps correctable failures", async () => {
+describe("session-start recovery (events only — never another session's holds)", () => {
+  it("applies pending events from any session, including the current one", async () => {
     const stale = `stale-${Math.random().toString(36).slice(2)}`;
-    const { writeRecord, rememberReservation: rem } = await import("../hooks/lib/state.mjs");
+    const { writeRecord } = await import("../hooks/lib/state.mjs");
     writeRecord(stale, "k_evt", { type: "event", toolName: "Bash", amount: 2 });
-    rem(stale, "k_hold", "rsv_stale");
+    writeRecord(session, "k_evt_mine", { type: "event", toolName: "Edit", amount: 1 });
     const fn = mockCycles([
-      { status: 200, body: { status: "APPLIED", event_id: "evt_s" } },
-      { status: 200, body: { status: "RELEASED" } },
+      { status: 200, body: { status: "APPLIED", event_id: "evt_1" } },
+      { status: 200, body: { status: "APPLIED", event_id: "evt_2" } },
     ]);
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: session }, ENV);
-    const urls = fn.mock.calls.map((c) => c[0]).sort();
-    expect(urls).toEqual(["http://cycles/v1/events", "http://cycles/v1/reservations/rsv_stale/release"]);
+    expect(fn.mock.calls.map((c) => c[0])).toEqual(["http://cycles/v1/events", "http://cycles/v1/events"]);
     expect(pendingRecords(stale)).toEqual([]);
-
-    // correctable failure retains the record for the next replay point
-    const stale2 = `stale2-${Math.random().toString(36).slice(2)}`;
-    rem(stale2, "k2", "rsv_stale2");
-    mockCycles([{ status: 401, body: { error: "UNAUTHORIZED", message: "bad key" } }]);
-    await sessionStart({ session_id: session }, ENV);
-    expect(pendingRecords(stale2)).toHaveLength(1);
-    clearState(stale2);
+    expect(pendingRecords(session)).toEqual([]);
   });
 
-  it("never touches the current session's records", async () => {
+  it("NEVER releases another session's holds — a concurrent session may be mid-tool-call", async () => {
+    const other = `other-${Math.random().toString(36).slice(2)}`;
     const { rememberReservation: rem } = await import("../hooks/lib/state.mjs");
-    rem(session, "k_mine", "rsv_mine");
+    rem(other, "k_live", "rsv_live");
     const fn = mockCycles([]);
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: session }, ENV);
-    expect(pendingRecords(session)).toHaveLength(1);
     expect(fn).not.toHaveBeenCalled();
+    expect(pendingRecords(other)).toHaveLength(1); // untouched — TTL/its own SessionEnd owns it
+    clearState(other);
+  });
+
+  it("keeps event records when application fails (next replay point retries)", async () => {
+    const stale = `stale-f-${Math.random().toString(36).slice(2)}`;
+    const { writeRecord } = await import("../hooks/lib/state.mjs");
+    writeRecord(stale, "k_evt_f", { type: "event", toolName: "Bash", amount: 2 });
+    mockCycles([{ status: 502, body: {} }]);
+    const { run: sessionStart } = await import("../hooks/session-start.mjs");
+    await sessionStart({ session_id: session }, ENV);
+    expect(pendingRecords(stale)).toHaveLength(1);
+    clearState(stale);
   });
 });
 

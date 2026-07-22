@@ -21,12 +21,12 @@ function sessionDir(sessionId) {
   return join(rootDir(), sanitize(sessionId));
 }
 
-// All sessions with unsettled records — used by SessionStart recovery to
-// sweep leftovers from crashed or never-resumed sessions.
-export function staleSessions(excludeSessionId) {
+// Every session directory with unsettled records — used by SessionStart
+// EVENT recovery. Includes the current session (a resumed session's pending
+// events should replay too).
+export function allSessions() {
   try {
-    const excluded = sanitize(excludeSessionId ?? "");
-    return readdirSync(rootDir()).filter((name) => name !== excluded);
+    return readdirSync(rootDir());
   } catch {
     return [];
   }

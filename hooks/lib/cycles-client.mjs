@@ -112,7 +112,17 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
   }
   let caps;
   if (json.decision === "ALLOW_WITH_CAPS" || json.caps !== undefined) {
-    caps = validateCaps(json.caps);
+    try {
+      caps = validateCaps(json.caps);
+    } catch (err) {
+      // The server DID create a hold before we rejected its caps payload —
+      // carry the id so the caller can release (or record) it instead of
+      // stranding it until TTL.
+      if (typeof json.reservation_id === "string" && json.reservation_id !== "") {
+        err.reservationId = json.reservation_id;
+      }
+      throw err;
+    }
   }
   return {
     decision: json.decision,

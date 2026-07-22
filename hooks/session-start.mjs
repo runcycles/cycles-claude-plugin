@@ -1,12 +1,17 @@
-// SessionStart: deterministic recovery point for records left behind by
-// crashed or never-resumed sessions — without this, a pending usage event
-// whose SessionEnd application also failed would remain uncharged forever.
-// Sweeps every OTHER session's leftovers: applies pending events, releases
-// stranded holds.
+// SessionStart: deterministic replay point for PENDING USAGE EVENTS —
+// charges for actions that already executed but whose event application
+// failed. Events are idempotent and safe to apply from any session,
+// including the current one on resume.
+//
+// Deliberately NEVER touches hold records: another session may be alive and
+// mid-tool-call, and releasing its hold would let its commit land on
+// RESERVATION_FINALIZED and the executed tool go uncharged. Stranded holds
+// are already time-bounded — the reservation TTL reclaims them server-side,
+// and the owning session's own SessionEnd releases them sooner.
 
 import { loadConfig, isConfigured } from "./lib/config.mjs";
-import { release, createEvent, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
-import { staleSessions, pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
+import { createEvent } from "./lib/cycles-client.mjs";
+import { allSessions, pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
 
 export async function run(input, env = process.env) {
   let config;
@@ -17,32 +22,21 @@ export async function run(input, env = process.env) {
   }
   if (!isConfigured(config)) return;
 
-  for (const staleId of staleSessions(input.session_id)) {
-    for (const [key, record] of pendingRecords(staleId)) {
+  for (const sessionId of allSessions()) {
+    for (const [key, record] of pendingRecords(sessionId)) {
+      if (record.type !== "event") continue; // holds belong to their session + TTL
       try {
-        if (record.type === "event") {
-          await createEvent(config, {
-            idempotencyKey: `${key}_e`,
-            toolName: record.toolName,
-            amount: record.amount,
-          });
-        } else {
-          await release(config, {
-            reservationId: record.reservationId,
-            idempotencyKey: `${key}_sr`,
-            reason: "recovered from a previous claude-code session",
-          });
-        }
-        deleteReservation(staleId, key);
+        await createEvent(config, {
+          idempotencyKey: `${key}_e`,
+          toolName: record.toolName,
+          amount: record.amount,
+        });
+        deleteReservation(sessionId, key);
       } catch (err) {
-        if (record.type !== "event" && TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
-          deleteReservation(staleId, key);
-          continue;
-        }
-        process.stderr.write(`cycles-plugin: session-start recovery failed for ${staleId}/${key}: ${err.message}\n`);
+        process.stderr.write(`cycles-plugin: session-start event recovery failed for ${sessionId}/${key}: ${err.message}\n`);
       }
     }
-    clearStateIfEmpty(staleId);
+    clearStateIfEmpty(sessionId);
   }
 }
 

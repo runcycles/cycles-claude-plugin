@@ -113,6 +113,20 @@ export async function run(input, env = process.env) {
     // frozen / closed, debt, auth failure, invalid request) is the server
     // saying NO — never fail open on it.
     if (err?.authoritative || err?.malformed) {
+      // A malformed response can arrive AFTER the server created a hold
+      // (e.g. valid reservation_id, garbage caps). Never strand it: try to
+      // release, and record it for session-end retry if the release fails.
+      if (typeof err.reservationId === "string" && err.reservationId !== "") {
+        try {
+          await release(config, {
+            reservationId: err.reservationId,
+            idempotencyKey: `${key}_r`,
+            reason: "malformed reserve response",
+          });
+        } catch {
+          rememberReservation(input.session_id, key, err.reservationId);
+        }
+      }
       output(
         "deny",
         `Cycles rejected ${toolName}: ${err.errorCode} — ${err.message}. Do not retry; resolve the budget/authorization state or stop.`,
