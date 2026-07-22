@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // SessionEnd: release any reservations whose PostToolUse never ran (crash,
 // interrupt, denied-then-abandoned). Server-side TTL would reclaim them
 // anyway; releasing promptly returns the held budget to the pool now.

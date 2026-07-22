@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // PreToolUse: reserve budget before the tool call executes. DENY from the
 // Cycles server blocks the call at the dispatch layer — the model cannot
 // skip it. This is the non-bypassable enforcement the MCP server alone

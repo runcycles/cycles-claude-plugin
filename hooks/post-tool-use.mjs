@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // PostToolUse: commit the reservation made in PreToolUse. Recomputes the
 // same identity key from the same stable fields, looks up the reservation,
 // and commits the flat cost. Surfaces low-budget pressure to the model via
