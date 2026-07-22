@@ -1,8 +1,21 @@
 # Cycles Budget Guard — Claude Code plugin
 
+[![CI](https://github.com/runcycles/cycles-claude-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/runcycles/cycles-claude-plugin/actions/workflows/ci.yml)
+[![Plugin v0.1.1](https://img.shields.io/badge/plugin-v0.1.1-7c3aed)](CHANGELOG.md)
+[![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
+[![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **Hard budget enforcement for Claude Code tool calls.** The [Cycles MCP server](https://github.com/runcycles/cycles-mcp-server) gives agents budget *tools*; this plugin puts Cycles in the **dispatch path**: gated tool calls are held behind a `PreToolUse` hook that reserves budget first, and a Cycles DENY blocks the call at the harness layer — the model cannot skip it. This closes the cooperative-enforcement gap documented in the MCP server's [Security Model](https://github.com/runcycles/cycles-mcp-server#security-model--enforcement-boundary).
 
 **Enforcement scope, precisely:** all tools are gated EXCEPT (a) the configurable skip list, which defaults to local zero-cost read tools (`Read`/`Glob`/`Grep`/`LS`/`NotebookRead`/`TodoWrite`/`AskUserQuestion`), and (b) the Cycles budget tools themselves, matched by exact namespace (recursion guard). Set `CYCLES_CC_SKIP_TOOLS=^$` to gate literally everything.
+
+Built for teams that need enforceable AI-agent budgets, auditable action-level cost control, and a clear runtime authority boundary around Claude Code automation.
+
+## Who it is for
+
+- Platform and security teams governing autonomous Claude Code workflows.
+- FinOps and engineering leaders who need tool usage tied to explicit budgets.
+- Developers who want an enforcement layer that does not depend on the model voluntarily checking a balance.
 
 ## What it does
 
@@ -34,6 +47,15 @@ export CYCLES_DEFAULT_APP=claude-code    # optional, finer attribution
 
 If `CYCLES_BASE_URL` or a subject default is missing, the plugin stays dormant (normal Claude Code permission flow) — it never half-enforces. An *invalid* value fails loudly by blocking calls with a config error.
 
+## Verify enforcement
+
+1. Use a test tenant with an exhausted, frozen, or closed Cycles budget.
+2. Ask Claude Code to run a gated action such as a `Bash` command.
+3. Confirm Cycles denies the reservation and the tool never executes.
+4. Run `/cycles-budget-guard:budget` to inspect the active budget and routing identity.
+
+For a fail-closed outage check, set `CYCLES_CC_FAIL_CLOSED=true`, point the test configuration at an unreachable Cycles endpoint, and confirm the gated tool call is blocked after the bounded four-second timeout.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -57,6 +79,14 @@ Once both a base URL and subject setting opt into enforcement, invalid URLs, sub
 ## Privacy
 
 The hooks send only: your configured API credential and subject identifiers, the tool *name*, unit and amount, and derived opaque hashes. **Tool arguments, file contents, and prompts are never sent** — the hash of `tool_input` is computed locally and only the digest leaves the machine as part of the idempotency key. Full policy: https://runcycles.io/privacy
+
+## Resources
+
+- [Cycles for Claude Code](https://runcycles.io/quickstart/mcp-claude-code)
+- [Claude and Codex integration guide](https://runcycles.io/how-to/add-cycles-with-claude-or-codex)
+- [Security and implementation audit](AUDIT.md)
+- [Release history](CHANGELOG.md)
+- [Report an issue](https://github.com/runcycles/cycles-claude-plugin/issues)
 
 ## License
 

@@ -1,11 +1,18 @@
 {
   "name": "@runcycles/cycles-claude-plugin",
-  "version": "0.1.0",
-  "description": "Claude Code plugin: hard budget enforcement for tool calls via Cycles",
+  "version": "0.1.1",
+  "description": "Hard budget enforcement for Claude Code tool calls with AI-agent cost control and Cycles usage metering",
   "license": "Apache-2.0",
-  "author": "runcycles",
+  "author": {
+    "name": "runcycles",
+    "url": "https://runcycles.io"
+  },
   "private": true,
   "type": "module",
+  "homepage": "https://runcycles.io",
+  "bugs": {
+    "url": "https://github.com/runcycles/cycles-claude-plugin/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/runcycles/cycles-claude-plugin.git"
@@ -13,6 +20,18 @@
   "engines": {
     "node": ">=22.0.0"
   },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "claude-code-hooks",
+    "ai-agents",
+    "budget-enforcement",
+    "cost-control",
+    "agent-governance",
+    "mcp",
+    "model-context-protocol",
+    "cycles"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

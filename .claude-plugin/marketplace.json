@@ -10,9 +10,35 @@
       "name": "cycles-budget-guard",
       "displayName": "Cycles Budget Guard",
       "source": "./",
-      "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating, usage metering, low-budget hints, and the full Cycles MCP toolset.",
-      "version": "0.1.0",
-      "author": { "name": "runcycles" }
+      "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating, AI-agent cost control, usage metering, and MCP budget tools.",
+      "version": "0.1.1",
+      "author": {
+        "name": "runcycles",
+        "url": "https://runcycles.io"
+      },
+      "homepage": "https://runcycles.io",
+      "repository": "https://github.com/runcycles/cycles-claude-plugin",
+      "license": "Apache-2.0",
+      "keywords": [
+        "claude-code",
+        "claude-code-plugin",
+        "claude-code-hooks",
+        "ai-agents",
+        "budget-enforcement",
+        "cost-control",
+        "agent-governance",
+        "mcp",
+        "model-context-protocol",
+        "cycles"
+      ],
+      "category": "security",
+      "tags": [
+        "claude-code",
+        "budget-enforcement",
+        "cost-control",
+        "ai-agents",
+        "mcp"
+      ]
     }
   ]
 }
