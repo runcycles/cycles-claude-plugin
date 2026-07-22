@@ -104,10 +104,19 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
   });
   // Validate the success response: a malformed 200 must never be treated as
   // an ALLOW (and "undefined" must never become a reservation id).
+  // A server that answered 200 may have created a hold regardless of how
+  // garbled the rest of the payload is — carry any plausible reservation id
+  // on EVERY post-success validation error so the caller can release or
+  // record it instead of stranding it until TTL.
+  const heldId = typeof json.reservation_id === "string" && json.reservation_id !== "" ? json.reservation_id : undefined;
+  const withHold = (err) => {
+    if (heldId) err.reservationId = heldId;
+    return err;
+  };
   if (!VALID_DECISIONS.has(json.decision)) {
-    throw malformed(`Cycles returned a malformed reserve response (decision: ${JSON.stringify(json.decision)})`);
+    throw withHold(malformed(`Cycles returned a malformed reserve response (decision: ${JSON.stringify(json.decision)})`));
   }
-  if (json.decision !== "DENY" && (typeof json.reservation_id !== "string" || json.reservation_id === "")) {
+  if (json.decision !== "DENY" && heldId === undefined) {
     throw malformed("Cycles returned ALLOW without a reservation_id");
   }
   let caps;
@@ -115,13 +124,7 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
     try {
       caps = validateCaps(json.caps);
     } catch (err) {
-      // The server DID create a hold before we rejected its caps payload —
-      // carry the id so the caller can release (or record) it instead of
-      // stranding it until TTL.
-      if (typeof json.reservation_id === "string" && json.reservation_id !== "") {
-        err.reservationId = json.reservation_id;
-      }
-      throw err;
+      throw withHold(err);
     }
   }
   return {

@@ -4,7 +4,7 @@
 // If the reservation expired mid-run (long tool / permission prompt), the
 // action still executed, so usage is charged via a fallback event.
 
-import { loadConfig, isConfigured } from "./lib/config.mjs";
+import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
 import { commit, createEvent } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
 import { peekRecord, deleteReservation, writeRecord } from "./lib/state.mjs";
@@ -37,7 +37,8 @@ export async function run(input, env = process.env) {
   if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
-  const record = peekRecord(input.session_id, key);
+  const rk = routingKey(config);
+  const record = peekRecord(rk, input.session_id, key);
   if (!record) return; // reserve was denied, failed open, or dry
 
   if (record.type === "event") {
@@ -45,7 +46,7 @@ export async function run(input, env = process.env) {
     // usage event — retry applying it.
     try {
       await createEvent(config, { idempotencyKey: `${key}_e`, toolName: record.toolName, amount: record.amount });
-      deleteReservation(input.session_id, key);
+      deleteReservation(rk, input.session_id, key);
     } catch (err) {
       process.stderr.write(`cycles-plugin: pending usage event retry failed: ${err.message}\n`);
     }
@@ -58,7 +59,7 @@ export async function run(input, env = process.env) {
       idempotencyKey: `${key}_c`,
       amount: config.cost,
     });
-    deleteReservation(input.session_id, key);
+    deleteReservation(rk, input.session_id, key);
     const hint = lowBudgetHint(result.balances);
     if (hint) {
       process.stdout.write(
@@ -71,10 +72,10 @@ export async function run(input, env = process.env) {
       // Durably downgrade the record to a pending event FIRST, so a failed
       // event application is retried (post replay or session end) instead of
       // the charge being lost forever.
-      writeRecord(input.session_id, key, { type: "event", toolName, amount: config.cost });
+      writeRecord(rk, input.session_id, key, { type: "event", toolName, amount: config.cost });
       try {
         await createEvent(config, { idempotencyKey: `${key}_e`, toolName, amount: config.cost });
-        deleteReservation(input.session_id, key);
+        deleteReservation(rk, input.session_id, key);
       } catch (eventErr) {
         process.stderr.write(`cycles-plugin: expired-reservation event fallback failed (kept pending): ${eventErr.message}\n`);
       }
@@ -82,7 +83,7 @@ export async function run(input, env = process.env) {
     }
     if (err?.errorCode === "RESERVATION_FINALIZED") {
       // Already settled (e.g. a replayed hook) — nothing left to hold.
-      deleteReservation(input.session_id, key);
+      deleteReservation(rk, input.session_id, key);
       return;
     }
     // Transient or malformed: keep the record so SessionEnd settles it.

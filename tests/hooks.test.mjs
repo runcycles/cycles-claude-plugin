@@ -5,12 +5,14 @@ import { run as sessionEnd } from "../hooks/session-end.mjs";
 import { run as postToolUseFailure } from "../hooks/post-tool-use-failure.mjs";
 import { toolCallKey } from "../hooks/lib/identity.mjs";
 import { pendingRecords, peekRecord, clearState } from "../hooks/lib/state.mjs";
+import { loadConfig, routingKey } from "../hooks/lib/config.mjs";
 
 const ENV = {
   CYCLES_BASE_URL: "http://cycles",
   CYCLES_API_KEY: "k",
   CYCLES_DEFAULT_TENANT: "t1",
 };
+const RK = routingKey(loadConfig(ENV));
 
 let session;
 let stdout;
@@ -50,7 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearState(session);
+  clearState(RK, session);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -83,7 +85,7 @@ describe("pre-tool-use", () => {
     const call = input({ tool_use_id: "tooluse_allow" });
     await preToolUse(call, ENV);
     expect(written()).toBe("");
-    expect(pendingRecords(session)).toEqual([[toolCallKey(call), { type: "hold", reservationId: "rsv_1" }]]);
+    expect(pendingRecords(RK, session)).toEqual([[toolCallKey(call), { type: "hold", reservationId: "rsv_1" }]]);
     const body = JSON.parse(fn.mock.calls[0][1].body);
     expect(body.idempotency_key).toBe(toolCallKey(call));
     expect(body.action).toEqual({ kind: "tool.call", name: "Bash" });
@@ -95,7 +97,7 @@ describe("pre-tool-use", () => {
     const out = JSON.parse(written());
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("BUDGET_EXHAUSTED");
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("denies on 409 BUDGET_EXCEEDED", async () => {
@@ -147,12 +149,43 @@ describe("pre-tool-use", () => {
     mockCycles([{ status: 200, body: { decision: "ALLOW" } }]);
     await preToolUse(input(), ENV);
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
+  });
 
-    stdout.mockClear();
-    mockCycles([{ status: 200, body: { decision: "MAYBE", reservation_id: "x" } }]);
+  it("releases the hold behind an UNKNOWN decision, and records it if release fails", async () => {
+    // unknown decision but a real reservation id: the server made a hold
+    const fn = mockCycles([
+      { status: 200, body: { decision: "MAYBE", reservation_id: "rsv_unk" } },
+      { status: 200, body: { status: "RELEASED" } },
+    ]);
     await preToolUse(input(), { ...ENV, CYCLES_CC_FAIL_CLOSED: "true" });
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(fn.mock.calls[1][0]).toContain("/rsv_unk/release");
+    expect(pendingRecords(RK, session)).toEqual([]);
+
+    stdout.mockClear();
+    mockCycles([
+      { status: 200, body: { decision: "MAYBE", reservation_id: "rsv_unk2" } },
+      { status: 502, body: {} },
+    ]);
+    const call = input({ tool_use_id: "tooluse_unk2" });
+    await preToolUse(call, ENV);
+    expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(peekRecord(RK, session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_unk2" });
+  });
+
+  it("routing isolation: a different server/tenant config cannot see or replay this config's records", async () => {
+    const { writeRecord } = await import("../hooks/lib/state.mjs");
+    const otherSession = `iso-${Math.random().toString(36).slice(2)}`;
+    writeRecord(RK, otherSession, "k_iso", { type: "event", toolName: "Bash", amount: 5 });
+
+    const OTHER_ENV = { CYCLES_BASE_URL: "http://other-cycles", CYCLES_API_KEY: "k2", CYCLES_DEFAULT_TENANT: "other-tenant" };
+    const fn = mockCycles([]);
+    const { run: sessionStart } = await import("../hooks/session-start.mjs");
+    await sessionStart({ session_id: "unrelated" }, OTHER_ENV);
+    expect(fn).not.toHaveBeenCalled(); // project B never touches project A's records
+    expect(pendingRecords(RK, otherSession)).toHaveLength(1);
+    clearState(RK, otherSession);
   });
 
   it("records the hold when a cap-denial release fails, so session end can retry", async () => {
@@ -163,7 +196,7 @@ describe("pre-tool-use", () => {
     const call = input({ tool_use_id: "tooluse_leak" });
     await preToolUse(call, ENV);
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(peekRecord(session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_leak" });
+    expect(peekRecord(RK, session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_leak" });
   });
 
   it("enforces caps tool_denylist: releases the hold and denies", async () => {
@@ -176,7 +209,7 @@ describe("pre-tool-use", () => {
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("tool_denylist");
     expect(fn.mock.calls[1][0]).toContain("/rsv_cap/release");
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("enforces caps tool_allowlist and surfaces other caps on stderr", async () => {
@@ -221,7 +254,7 @@ describe("post-tool-use", () => {
     await postToolUse(call, ENV);
     expect(fn.mock.calls[1][0]).toBe("http://cycles/v1/reservations/rsv_9/commit");
     expect(JSON.parse(fn.mock.calls[1][1].body).idempotency_key).toBe(`${toolCallKey(call)}_c`);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("is a no-op when nothing was reserved", async () => {
@@ -260,7 +293,7 @@ describe("post-tool-use", () => {
     await postToolUse(failCall, ENV);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("rsv_f"));
     // transient failure keeps the record for session-end release
-    expect(pendingRecords(session)).toHaveLength(1);
+    expect(pendingRecords(RK, session)).toHaveLength(1);
   });
 });
 
@@ -281,7 +314,7 @@ describe("caps validation (malformed caps never bypass)", () => {
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("tool_denylist");
     expect(fn.mock.calls[1][0]).toContain("/rsv_mc/release");
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("records the stranded hold when its release also fails", async () => {
@@ -292,7 +325,7 @@ describe("caps validation (malformed caps never bypass)", () => {
     const call = input({ tool_use_id: "tooluse_strand" });
     await preToolUse(call, ENV);
     expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(peekRecord(session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_mt2" });
+    expect(peekRecord(RK, session, toolCallKey(call))).toEqual({ type: "hold", reservationId: "rsv_mt2" });
   });
 });
 
@@ -300,8 +333,8 @@ describe("session-start recovery (events only — never another session's holds)
   it("applies pending events from any session, including the current one", async () => {
     const stale = `stale-${Math.random().toString(36).slice(2)}`;
     const { writeRecord } = await import("../hooks/lib/state.mjs");
-    writeRecord(stale, "k_evt", { type: "event", toolName: "Bash", amount: 2 });
-    writeRecord(session, "k_evt_mine", { type: "event", toolName: "Edit", amount: 1 });
+    writeRecord(RK, stale, "k_evt", { type: "event", toolName: "Bash", amount: 2 });
+    writeRecord(RK, session, "k_evt_mine", { type: "event", toolName: "Edit", amount: 1 });
     const fn = mockCycles([
       { status: 200, body: { status: "APPLIED", event_id: "evt_1" } },
       { status: 200, body: { status: "APPLIED", event_id: "evt_2" } },
@@ -309,31 +342,31 @@ describe("session-start recovery (events only — never another session's holds)
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: session }, ENV);
     expect(fn.mock.calls.map((c) => c[0])).toEqual(["http://cycles/v1/events", "http://cycles/v1/events"]);
-    expect(pendingRecords(stale)).toEqual([]);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, stale)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("NEVER releases another session's holds — a concurrent session may be mid-tool-call", async () => {
     const other = `other-${Math.random().toString(36).slice(2)}`;
     const { rememberReservation: rem } = await import("../hooks/lib/state.mjs");
-    rem(other, "k_live", "rsv_live");
+    rem(RK, other, "k_live", "rsv_live");
     const fn = mockCycles([]);
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: session }, ENV);
     expect(fn).not.toHaveBeenCalled();
-    expect(pendingRecords(other)).toHaveLength(1); // untouched — TTL/its own SessionEnd owns it
-    clearState(other);
+    expect(pendingRecords(RK, other)).toHaveLength(1); // untouched — TTL/its own SessionEnd owns it
+    clearState(RK, other);
   });
 
   it("keeps event records when application fails (next replay point retries)", async () => {
     const stale = `stale-f-${Math.random().toString(36).slice(2)}`;
     const { writeRecord } = await import("../hooks/lib/state.mjs");
-    writeRecord(stale, "k_evt_f", { type: "event", toolName: "Bash", amount: 2 });
+    writeRecord(RK, stale, "k_evt_f", { type: "event", toolName: "Bash", amount: 2 });
     mockCycles([{ status: 502, body: {} }]);
     const { run: sessionStart } = await import("../hooks/session-start.mjs");
     await sessionStart({ session_id: session }, ENV);
-    expect(pendingRecords(stale)).toHaveLength(1);
-    clearState(stale);
+    expect(pendingRecords(RK, stale)).toHaveLength(1);
+    clearState(RK, stale);
   });
 });
 
@@ -349,7 +382,7 @@ describe("post-tool-use settlement", () => {
     await postToolUse(call, ENV);
     expect(fn.mock.calls[2][0]).toBe("http://cycles/v1/events");
     expect(JSON.parse(fn.mock.calls[2][1].body).idempotency_key).toBe(`${toolCallKey(call)}_e`);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("keeps a durable pending-event record when the fallback event fails", async () => {
@@ -361,13 +394,13 @@ describe("post-tool-use settlement", () => {
     const call = input({ tool_use_id: "tooluse_pend" });
     await preToolUse(call, ENV);
     await postToolUse(call, ENV);
-    expect(peekRecord(session, toolCallKey(call))).toEqual({ type: "event", toolName: "Bash", amount: 1 });
+    expect(peekRecord(RK, session, toolCallKey(call))).toEqual({ type: "event", toolName: "Bash", amount: 1 });
 
     // session end applies the pending event instead of releasing
     const fn2 = mockCycles([{ status: 200, body: { status: "APPLIED", event_id: "evt_p" } }]);
     await sessionEnd({ session_id: session }, ENV);
     expect(fn2.mock.calls[0][0]).toBe("http://cycles/v1/events");
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("post retries a pending event record directly (success and failure paths)", async () => {
@@ -381,9 +414,9 @@ describe("post-tool-use settlement", () => {
     const call = input({ tool_use_id: "tooluse_replay" });
     await preToolUse(call, ENV);
     await postToolUse(call, ENV);
-    expect(peekRecord(session, toolCallKey(call))).toMatchObject({ type: "event" });
+    expect(peekRecord(RK, session, toolCallKey(call))).toMatchObject({ type: "event" });
     await postToolUse(call, ENV);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
 
     // failure: retry also fails -> record kept, stderr logged
     mockCycles([
@@ -396,7 +429,7 @@ describe("post-tool-use settlement", () => {
     await preToolUse(call2, ENV);
     await postToolUse(call2, ENV);
     await postToolUse(call2, ENV);
-    expect(peekRecord(session, toolCallKey(call2))).toMatchObject({ type: "event" });
+    expect(peekRecord(RK, session, toolCallKey(call2))).toMatchObject({ type: "event" });
   });
 
   it("post no-ops when unconfigured/misconfigured/exempt", async () => {
@@ -415,7 +448,7 @@ describe("post-tool-use settlement", () => {
     const call = input({ tool_use_id: "tooluse_fin" });
     await preToolUse(call, ENV);
     await postToolUse(call, ENV);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 });
 
@@ -441,7 +474,7 @@ describe("post-tool-use-failure", () => {
     await postToolUseFailure(call, ENV);
     expect(fn.mock.calls[1][0]).toBe("http://cycles/v1/reservations/rsv_tf/release");
     expect(JSON.parse(fn.mock.calls[1][1].body).reason).toBe("tool call failed");
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("keeps the record on transient AND correctable-4xx failures, clears only on terminal codes", async () => {
@@ -452,17 +485,17 @@ describe("post-tool-use-failure", () => {
     const call = input({ tool_use_id: "tooluse_tr" });
     await preToolUse(call, ENV);
     await postToolUseFailure(call, ENV);
-    expect(pendingRecords(session)).toHaveLength(1);
+    expect(pendingRecords(RK, session)).toHaveLength(1);
 
     // auth failure is 4xx but CORRECTABLE — the record must survive
     mockCycles([{ status: 401, body: { error: "UNAUTHORIZED", message: "bad key" } }]);
     await postToolUseFailure(call, ENV);
-    expect(pendingRecords(session)).toHaveLength(1);
+    expect(pendingRecords(RK, session)).toHaveLength(1);
 
     // terminal: the hold is definitively gone server-side
     mockCycles([{ status: 410, body: { error: "RESERVATION_EXPIRED", message: "gone" } }]);
     await postToolUseFailure(call, ENV);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 });
 
@@ -493,7 +526,7 @@ describe("session-end", () => {
         "http://cycles/v1/reservations/rsv_b/release",
       ]),
     );
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("clears expired holds and retains records on transient failures", async () => {
@@ -504,7 +537,7 @@ describe("session-end", () => {
     const call = input({ tool_use_id: "tooluse_se1" });
     await preToolUse(call, ENV);
     await sessionEnd({ session_id: session }, ENV);
-    expect(pendingRecords(session)).toEqual([]);
+    expect(pendingRecords(RK, session)).toEqual([]);
 
     mockCycles([
       { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_y" } },
@@ -512,7 +545,7 @@ describe("session-end", () => {
     ]);
     await preToolUse(input({ tool_use_id: "tooluse_se2" }), ENV);
     await sessionEnd({ session_id: session }, ENV);
-    expect(pendingRecords(session)).toHaveLength(1); // transient — kept for TTL story
+    expect(pendingRecords(RK, session)).toHaveLength(1); // transient — kept for TTL story
   });
 
   it("retains records on correctable 4xx at session end (auth is not terminal)", async () => {
@@ -522,7 +555,7 @@ describe("session-end", () => {
     ]);
     await preToolUse(input({ tool_use_id: "tooluse_se3" }), ENV);
     await sessionEnd({ session_id: session }, ENV);
-    expect(pendingRecords(session)).toHaveLength(1);
+    expect(pendingRecords(RK, session)).toHaveLength(1);
   });
 
   it("no-ops when unconfigured or misconfigured", async () => {

@@ -1,6 +1,8 @@
 // Plugin configuration, entirely from environment variables so it works
 // identically under Claude Code's hook runner and in tests.
 
+import { createHash } from "node:crypto";
+
 const SUBJECT_FIELDS = ["tenant", "workspace", "app", "workflow", "agent", "toolset"];
 
 function clampInt(raw, fallback, min, max) {
@@ -46,6 +48,19 @@ export function loadConfig(env = process.env) {
     // falls back to a usage event. Spec cap is 86400000.
     ttlMs: clampInt(env.CYCLES_CC_TTL_MS, 1_800_000, 1000, 86_400_000),
   };
+}
+
+// Non-secret routing identity: state is namespaced by WHERE charges go
+// (server + subject + unit), so recovery can only ever replay records that
+// were created under an identical routing configuration — never charging a
+// different tenant, server, or unit for another project's action.
+export function routingKey(config) {
+  const material = JSON.stringify([
+    config.baseUrl,
+    Object.keys(config.subject).sort().map((k) => [k, config.subject[k]]),
+    config.unit,
+  ]);
+  return createHash("sha256").update(material).digest("hex").slice(0, 16);
 }
 
 export function isConfigured(config) {

@@ -3,7 +3,7 @@
 // skip it. This is the non-bypassable enforcement the MCP server alone
 // cannot provide (see the server README's Security Model section).
 
-import { loadConfig, isConfigured } from "./lib/config.mjs";
+import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
 import { reserve, release } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
 import { rememberReservation } from "./lib/state.mjs";
@@ -60,6 +60,7 @@ export async function run(input, env = process.env) {
   if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
+  const rk = routingKey(config);
   try {
     const result = await reserve(config, {
       idempotencyKey: key,
@@ -87,12 +88,12 @@ export async function run(input, env = process.env) {
           reason: "denied by caps",
         });
       } catch {
-        rememberReservation(input.session_id, key, result.reservationId);
+        rememberReservation(rk, input.session_id, key, result.reservationId);
       }
       output("deny", `Cycles caps forbid this call: ${violation}. Respect the caps or choose an allowed tool.`);
       return;
     }
-    rememberReservation(input.session_id, key, result.reservationId);
+    rememberReservation(rk, input.session_id, key, result.reservationId);
     if (result.decision === "ALLOW_WITH_CAPS" && result.caps) {
       const summary = capsSummary(result.caps);
       if (summary) {
@@ -124,7 +125,7 @@ export async function run(input, env = process.env) {
             reason: "malformed reserve response",
           });
         } catch {
-          rememberReservation(input.session_id, key, err.reservationId);
+          rememberReservation(rk, input.session_id, key, err.reservationId);
         }
       }
       output(

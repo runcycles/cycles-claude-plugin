@@ -9,7 +9,7 @@
 // are already time-bounded — the reservation TTL reclaims them server-side,
 // and the owning session's own SessionEnd releases them sooner.
 
-import { loadConfig, isConfigured } from "./lib/config.mjs";
+import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
 import { createEvent } from "./lib/cycles-client.mjs";
 import { allSessions, pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
 
@@ -21,9 +21,10 @@ export async function run(input, env = process.env) {
     return;
   }
   if (!isConfigured(config)) return;
+  const rk = routingKey(config);
 
-  for (const sessionId of allSessions()) {
-    for (const [key, record] of pendingRecords(sessionId)) {
+  for (const sessionId of allSessions(rk)) {
+    for (const [key, record] of pendingRecords(rk, sessionId)) {
       if (record.type !== "event") continue; // holds belong to their session + TTL
       try {
         await createEvent(config, {
@@ -31,12 +32,12 @@ export async function run(input, env = process.env) {
           toolName: record.toolName,
           amount: record.amount,
         });
-        deleteReservation(sessionId, key);
+        deleteReservation(rk, sessionId, key);
       } catch (err) {
         process.stderr.write(`cycles-plugin: session-start event recovery failed for ${sessionId}/${key}: ${err.message}\n`);
       }
     }
-    clearStateIfEmpty(sessionId);
+    clearStateIfEmpty(rk, sessionId);
   }
 }
 

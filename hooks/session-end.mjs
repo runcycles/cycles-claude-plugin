@@ -4,7 +4,7 @@
 // hold this misses; pending events are retried here because nothing else
 // will charge them.
 
-import { loadConfig, isConfigured } from "./lib/config.mjs";
+import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
 import { release, createEvent, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
 import { pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
 
@@ -16,8 +16,9 @@ export async function run(input, env = process.env) {
     return;
   }
   if (!isConfigured(config)) return;
+  const rk = routingKey(config);
 
-  for (const [key, record] of pendingRecords(input.session_id)) {
+  for (const [key, record] of pendingRecords(rk, input.session_id)) {
     try {
       if (record.type === "event") {
         await createEvent(config, {
@@ -32,19 +33,19 @@ export async function run(input, env = process.env) {
           reason: "claude-code session ended",
         });
       }
-      deleteReservation(input.session_id, key);
+      deleteReservation(rk, input.session_id, key);
     } catch (err) {
       if (record.type !== "event" && TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
         // Hold definitively gone server-side — nothing left to free. Other
         // 4xx (auth, idempotency) are correctable: keep the record.
-        deleteReservation(input.session_id, key);
+        deleteReservation(rk, input.session_id, key);
         continue;
       }
       process.stderr.write(`cycles-plugin: session-end settlement failed for ${key}: ${err.message}
 `);
     }
   }
-  clearStateIfEmpty(input.session_id);
+  clearStateIfEmpty(rk, input.session_id);
 }
 
 /* v8 ignore start -- process-level entry, covered by tests/e2e.test.mjs */

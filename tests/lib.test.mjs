@@ -147,39 +147,40 @@ describe("cycles-client", () => {
 });
 
 describe("state", () => {
+  const RK = "rk-test";
   const session = `test-${process.pid}-${Math.random().toString(36).slice(2)}`;
 
   it("round-trips typed records", () => {
-    rememberReservation(session, "tu_1", "rsv_1");
-    writeRecord(session, "tu_2", { type: "event", toolName: "Bash", amount: 3 });
-    expect(pendingRecords(session)).toHaveLength(2);
-    expect(peekRecord(session, "tu_1")).toEqual({ type: "hold", reservationId: "rsv_1" });
-    expect(peekRecord(session, "tu_1")).toBeDefined(); // peek does not consume
-    deleteReservation(session, "tu_1");
-    expect(peekRecord(session, "tu_1")).toBeUndefined();
-    expect(pendingRecords(session)).toEqual([["tu_2", { type: "event", toolName: "Bash", amount: 3 }]]);
-    clearState(session);
-    expect(pendingRecords(session)).toEqual([]);
+    rememberReservation(RK, session, "tu_1", "rsv_1");
+    writeRecord(RK, session, "tu_2", { type: "event", toolName: "Bash", amount: 3 });
+    expect(pendingRecords(RK, session)).toHaveLength(2);
+    expect(peekRecord(RK, session, "tu_1")).toEqual({ type: "hold", reservationId: "rsv_1" });
+    expect(peekRecord(RK, session, "tu_1")).toBeDefined(); // peek does not consume
+    deleteReservation(RK, session, "tu_1");
+    expect(peekRecord(RK, session, "tu_1")).toBeUndefined();
+    expect(pendingRecords(RK, session)).toEqual([["tu_2", { type: "event", toolName: "Bash", amount: 3 }]]);
+    clearState(RK, session);
+    expect(pendingRecords(RK, session)).toEqual([]);
   });
 
   it("skips corrupt record files", async () => {
     const { writeFileSync, mkdirSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const dir = join(tmpdir(), "cycles-claude-plugin", session);
+    const dir = join(tmpdir(), "cycles-claude-plugin", RK, session);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "corrupt"), "not json{");
-    rememberReservation(session, "tu_ok", "rsv_ok");
-    const records = pendingRecords(session);
+    rememberReservation(RK, session, "tu_ok", "rsv_ok");
+    const records = pendingRecords(RK, session);
     expect(records).toHaveLength(1);
     expect(records[0][0]).toBe("tu_ok");
-    clearState(session);
+    clearState(RK, session);
   });
 
   it("sanitizes hostile session ids", () => {
     const hostile = "../../etc/passwd";
-    rememberReservation(hostile, "tu", "rsv");
-    expect(peekRecord(hostile, "tu")).toEqual({ type: "hold", reservationId: "rsv" });
-    clearState(hostile);
+    rememberReservation(RK, hostile, "tu", "rsv");
+    expect(peekRecord(RK, hostile, "tu")).toEqual({ type: "hold", reservationId: "rsv" });
+    clearState(RK, hostile);
   });
 });

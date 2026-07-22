@@ -13,20 +13,22 @@ function sanitize(value) {
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function rootDir() {
-  return join(tmpdir(), "cycles-claude-plugin");
+function routingDir(routingKey) {
+  return join(tmpdir(), "cycles-claude-plugin", sanitize(routingKey));
 }
 
-function sessionDir(sessionId) {
-  return join(rootDir(), sanitize(sessionId));
+function sessionDir(routingKey, sessionId) {
+  return join(routingDir(routingKey), sanitize(sessionId));
 }
 
-// Every session directory with unsettled records — used by SessionStart
-// EVENT recovery. Includes the current session (a resumed session's pending
-// events should replay too).
-export function allSessions() {
+// Every session directory with unsettled records UNDER THE SAME ROUTING
+// CONFIGURATION — used by SessionStart event recovery. Records made under a
+// different server/subject/unit are invisible by construction, so replay can
+// never charge the wrong place. Includes the current session (a resumed
+// session's pending events should replay too).
+export function allSessions(routingKey) {
   try {
-    return readdirSync(rootDir());
+    return readdirSync(routingDir(routingKey));
   } catch {
     return [];
   }
@@ -36,36 +38,36 @@ export function allSessions() {
 // reservation, { type: "event", toolName, amount } for an executed action
 // whose expired-reservation usage event has not been applied yet. Both must
 // survive failed settlements so SessionEnd can finish the job.
-export function writeRecord(sessionId, key, record) {
-  const dir = sessionDir(sessionId);
+export function writeRecord(routingKey, sessionId, key, record) {
+  const dir = sessionDir(routingKey, sessionId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, sanitize(key)), JSON.stringify(record));
 }
 
-export function rememberReservation(sessionId, key, reservationId) {
-  writeRecord(sessionId, key, { type: "hold", reservationId });
+export function rememberReservation(routingKey, sessionId, key, reservationId) {
+  writeRecord(routingKey, sessionId, key, { type: "hold", reservationId });
 }
 
 // Read WITHOUT deleting: the record must survive a failed settlement so that
 // SessionEnd can still settle it.
-export function peekRecord(sessionId, key) {
+export function peekRecord(routingKey, sessionId, key) {
   try {
-    return JSON.parse(readFileSync(join(sessionDir(sessionId), sanitize(key)), "utf8"));
+    return JSON.parse(readFileSync(join(sessionDir(routingKey, sessionId), sanitize(key)), "utf8"));
   } catch {
     return undefined;
   }
 }
 
-export function deleteReservation(sessionId, key) {
+export function deleteReservation(routingKey, sessionId, key) {
   try {
-    unlinkSync(join(sessionDir(sessionId), sanitize(key)));
+    unlinkSync(join(sessionDir(routingKey, sessionId), sanitize(key)));
   } catch {
     // already gone
   }
 }
 
-export function pendingRecords(sessionId) {
-  const dir = sessionDir(sessionId);
+export function pendingRecords(routingKey, sessionId) {
+  const dir = sessionDir(routingKey, sessionId);
   try {
     return readdirSync(dir).map((name) => {
       try {
@@ -79,9 +81,9 @@ export function pendingRecords(sessionId) {
   }
 }
 
-export function clearState(sessionId) {
+export function clearState(routingKey, sessionId) {
   try {
-    rmSync(sessionDir(sessionId), { recursive: true, force: true });
+    rmSync(sessionDir(routingKey, sessionId), { recursive: true, force: true });
   } catch {
     // best effort
   }
@@ -89,9 +91,9 @@ export function clearState(sessionId) {
 
 // Session-end cleanup must NOT wipe records that failed to settle — only
 // remove the directory once everything in it has been handled.
-export function clearStateIfEmpty(sessionId) {
+export function clearStateIfEmpty(routingKey, sessionId) {
   try {
-    rmdirSync(sessionDir(sessionId));
+    rmdirSync(sessionDir(routingKey, sessionId));
   } catch {
     // non-empty or already gone — either is fine
   }

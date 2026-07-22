@@ -2,7 +2,7 @@
 // complete, so the hold is RELEASED rather than committed — failed attempts
 // return budget to the pool instead of charging it.
 
-import { loadConfig, isConfigured } from "./lib/config.mjs";
+import { loadConfig, isConfigured, routingKey } from "./lib/config.mjs";
 import { release, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
 import { peekRecord, deleteReservation } from "./lib/state.mjs";
@@ -20,7 +20,8 @@ export async function run(input, env = process.env) {
   if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
-  const record = peekRecord(input.session_id, key);
+  const rk = routingKey(config);
+  const record = peekRecord(rk, input.session_id, key);
   if (!record) return;
   if (record.type === "event") return; // pending charge for an executed action — session end applies it
 
@@ -30,10 +31,10 @@ export async function run(input, env = process.env) {
       idempotencyKey: `${key}_r`,
       reason: "tool call failed",
     });
-    deleteReservation(input.session_id, key);
+    deleteReservation(rk, input.session_id, key);
   } catch (err) {
     if (TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
-      deleteReservation(input.session_id, key);
+      deleteReservation(rk, input.session_id, key);
       return;
     }
     process.stderr.write(`cycles-plugin: release failed for ${record.reservationId} (will retry at session end): ${err.message}\n`);
