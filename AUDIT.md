@@ -1,12 +1,12 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
-**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–7)
+**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
 **Plugin:** `cycles-budget-guard` v0.1.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
 
 ## Current design (authoritative — supersedes anything below that contradicts it)
 
-- **Dispatch-path enforcement:** PreToolUse reserves before every GATED tool call and denies on: server DENY; any authoritative 4xx protocol rejection (exhausted/frozen/closed budgets, debt, auth, invalid request); any MALFORMED response (unknown decision, ALLOW without reservation_id, mistyped caps fields) — integrity failures never grant execution. Fail-open (allow + warning) applies ONLY to outages: 5xx, network errors, and the 4s request timeout; `CYCLES_CC_FAIL_CLOSED=true` denies on outages too.
+- **Dispatch-path enforcement:** PreToolUse reserves before every GATED tool call and denies on: server DENY; any authoritative 4xx protocol rejection (exhausted/frozen/closed budgets, debt, auth, invalid request); any MALFORMED protocol response or hook input — integrity failures never grant execution. Fail-open (allow + warning) applies ONLY to outages: 5xx, network errors, and the 4s request timeout; `CYCLES_CC_FAIL_CLOSED=true` denies on outages too.
 - **Enforcement scope:** all tools EXCEPT the operator skip list (default: local zero-cost reads — `Read|Glob|Grep|LS|NotebookRead|TodoWrite|AskUserQuestion`; set `CYCLES_CC_SKIP_TOOLS=^$` to gate everything) and the Cycles budget tools themselves, matched by exact namespace (`^mcp__(plugin_cycles-budget-guard_)?cycles__` — lookalikes like `mcp__bicycles__*` are gated).
 - **Caps:** ALLOW_WITH_CAPS requires a closed-schema caps object: integer/non-negative numeric fields, ≤256-character list entries, no unknown fields, and no caps on other decisions. `tool_allowlist`/`tool_denylist` are enforced at the gate with the protocol's allowlist precedence. Violations are malformed → deny; any plausible hold is released or recorded. Remaining caps are surfaced via `hookSpecificOutput.additionalContext` without altering the user permission flow.
 - **Identity:** keys are `cc_<sha256(session_id | tool_use_id)[:32]>` — `tool_use_id` is the documented per-call unique id, so distinct identical calls charge separately and transport retries replay. Content-hash fallback exists only for Claude Code versions predating `tool_use_id` (collision limit documented there).
@@ -20,7 +20,7 @@
 
 ## Current verification (2026-07-22)
 
-73 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
+75 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
 
 ## History (appended review rounds; superseded statements above)
 
@@ -115,3 +115,11 @@ The review's headline was correct: the repository was not yet entitled to claim 
 3. **P2 — URL validation and use could diverge:** the WHATWG parser accepted canonicalizable spellings while requests retained the raw spelling. Base URLs are now whitespace-strict and use the parser's canonical representation.
 4. **P2 — hook commands used shell form despite path placeholders:** all handlers now use Claude Code's documented exec form (`command` + `args`), avoiding shell parsing across platforms and install paths.
 5. **P3 — CI/action and privacy wording:** the pinned `setup-node` SHA is v7.0.0 (the stale v6 comment is corrected), and the privacy inventory now explicitly includes the configured API credential.
+
+---
+
+## Enforcement Review Round 8 (2026-07-22) — hook-input integrity
+
+1. **P1 — malformed hook input could silently allow execution:** the process entrypoint logged JSON parse/unhandled errors but exited zero, and `run(null)` could throw through the same path. Configured PreToolUse now denies non-object or missing-identity payloads, while malformed raw stdin exits 2 (Claude Code's documented blocking-error path). A truly dormant plugin remains non-blocking.
+2. **P2 — CI lint did not cover test/config code:** the lint target and shared Node globals now cover every checked-in JavaScript and MJS source file, including tests and Vitest/ESLint configuration.
+3. **P3 — stale runtime metadata:** `package.json` required Node 22 while the lockfile root still said Node 20. The lockfile and README prerequisite now agree with the runtime and CI matrix.

@@ -132,6 +132,14 @@ describe("pre-tool-use", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("denies malformed hook payloads when enforcement is configured", async () => {
+    const fn = mockCycles([]);
+    await preToolUse(null, ENV);
+    expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(JSON.parse(written()).hookSpecificOutput.permissionDecisionReason).toContain("malformed hook input");
+    expect(fn).not.toHaveBeenCalled();
+  });
+
   it("never gates cycles tools or skip-listed tools", async () => {
     const fn = mockCycles([]);
     await preToolUse(input({ tool_name: "mcp__plugin_cycles-budget-guard_cycles__cycles_reserve" }), ENV);

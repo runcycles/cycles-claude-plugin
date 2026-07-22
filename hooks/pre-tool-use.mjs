@@ -19,6 +19,10 @@ function hasSubjectSetting(env) {
   return SUBJECT_ENV_KEYS.some((key) => env[key] !== undefined && env[key] !== "");
 }
 
+function enforcementOptedIn(env) {
+  return Boolean(env.CYCLES_BASE_URL) && hasSubjectSetting(env);
+}
+
 function output(decision, reason) {
   const hookSpecificOutput = {
     hookEventName: "PreToolUse",
@@ -67,12 +71,18 @@ export async function run(input, env = process.env) {
     // rather than silently unenforced. With no base URL at all the plugin
     // would be dormant anyway — a stray bad default must not block a setup
     // that never opted into enforcement.
-    if (!env.CYCLES_BASE_URL || !hasSubjectSetting(env)) return;
+    if (!enforcementOptedIn(env)) return;
     output("deny", `Cycles plugin misconfigured: ${err.message}`);
     return;
   }
 
   if (!isConfigured(config)) return; // not set up — normal permission flow
+  if (typeof input !== "object" || input === null || Array.isArray(input) ||
+      typeof input.session_id !== "string" || input.session_id === "" ||
+      typeof input.tool_name !== "string" || input.tool_name === "") {
+    output("deny", "Cycles enforcement received malformed hook input; the tool call is blocked.");
+    return;
+  }
   const toolName = String(input.tool_name ?? "");
   if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
@@ -187,6 +197,9 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
     await run(JSON.parse(raw));
   } catch (err) {
     process.stderr.write(`cycles-plugin: ${err?.message ?? err}\n`);
+    // Exit 2 is Claude Code's documented blocking-error path for PreToolUse.
+    // A configured guard must never turn malformed stdin into a silent allow.
+    if (enforcementOptedIn(process.env)) process.exitCode = 2;
   }
 }
 /* v8 ignore stop */

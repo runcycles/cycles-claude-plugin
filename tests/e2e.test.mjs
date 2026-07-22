@@ -88,7 +88,7 @@ describe("hook processes end-to-end", () => {
     expect(end.code).toBe(0);
   });
 
-  it("malformed stdin never crashes a hook (non-blocking stderr)", async () => {
+  it("keeps malformed stdin non-blocking while enforcement is dormant", async () => {
     const child = await new Promise((resolve) => {
       const c = execFile(process.execPath, [join(hooksDir, "pre-tool-use.mjs")], { encoding: "utf8" }, (error, stdout, stderr) =>
         resolve({ code: error?.code ?? 0, stdout, stderr }),
@@ -96,6 +96,27 @@ describe("hook processes end-to-end", () => {
       c.stdin.end("this is not json");
     });
     expect(child.code).toBe(0);
+    expect(child.stderr).toContain("cycles-plugin:");
+  });
+
+  it("malformed stdin blocks when enforcement is configured", async () => {
+    const child = await new Promise((resolve) => {
+      const c = execFile(
+        process.execPath,
+        [join(hooksDir, "pre-tool-use.mjs")],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CYCLES_BASE_URL: baseUrl,
+            CYCLES_DEFAULT_TENANT: "e2e",
+          },
+        },
+        (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }),
+      );
+      c.stdin.end("this is not json");
+    });
+    expect(child.code).toBe(2);
     expect(child.stderr).toContain("cycles-plugin:");
   });
 });

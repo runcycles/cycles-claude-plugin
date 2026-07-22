@@ -6,7 +6,7 @@
 
 ## What it does
 
-- **PreToolUse** — reserves a flat per-call cost before each gated tool call. Any authoritative Cycles rejection — DENY, budget exhausted/frozen/closed, debt, auth failure, invalid request — blocks the call with a reason the model sees; fail-open applies ONLY to outages (5xx/network/timeout). `ALLOW_WITH_CAPS` is validated against the protocol and tool allow/denylists are enforced with allowlist precedence; other caps are surfaced to the transcript. A granted call is denied and its hold returned if durable local settlement state cannot be written. Idempotency keys derive from `tool_use_id` (unique per call), so transport retries never double-reserve.
+- **PreToolUse** — reserves a flat per-call cost before each gated tool call. Any authoritative Cycles rejection — DENY, budget exhausted/frozen/closed, debt, auth failure, invalid request — blocks the call with a reason the model sees; malformed protocol or hook inputs also block, while fail-open applies ONLY to outages (5xx/network/timeout). `ALLOW_WITH_CAPS` is validated against the protocol and tool allow/denylists are enforced with allowlist precedence; other caps are surfaced to the transcript. A granted call is denied and its hold returned if durable local settlement state cannot be written. Idempotency keys derive from `tool_use_id` (unique per call), so transport retries never double-reserve.
 - **PostToolUse** (success) — durably marks the action as executed, then commits the reservation. Transient failures remain pending commits and are retried; if the reservation expired, disappeared, or was finalized, usage is charged via an idempotent fallback event. Injects a low-budget warning into the model's context under 15% remaining.
 - **PostToolUseFailure** — releases the hold when the tool call failed: failed attempts return budget instead of charging it.
 - **SessionEnd** — settles anything the per-call hooks could not: releases unresolved holds, retries pending commits, and applies pending usage events. State survives failed settlements.
@@ -15,6 +15,8 @@
 - **`/cycles-budget-guard:budget`** — one-command budget status report.
 
 ## Install
+
+Requires Node.js 22 or newer.
 
 ```
 /plugin marketplace add runcycles/cycles-claude-plugin
