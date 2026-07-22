@@ -60,3 +60,17 @@ The review's headline was correct: the repository was not yet entitled to claim 
 7. **EOL runtime (P2).** Engines now `>=22`; CI tests 22/24 (Node 20 reached EOL).
 8. **Coverage vs contract (P2).** Tests now construct production-shaped inputs (`tool_use_id` present), and cover: every authoritative rejection class, malformed 200s, caps enforcement, failure settlement, transient-failure state retention, expiry event fallback, exact-namespace guard — plus a checked-in end-to-end suite spawning the real hook processes against a live HTTP server (entry blocks are no longer untested). 45 tests; thresholds enforced.
 9. **Documentation honesty (P2).** README no longer claims every call is gated (enforcement scope stated precisely, with the skip list and an opt-out to gate everything); the collision claim is rewritten for the tool_use_id reality; "bundled" corrected; this AUDIT reflects current counts and discloses the above.
+
+---
+
+## Enforcement Review Round 2 (2026-07-22) — seven findings, all accepted
+
+1. **CI blocker:** the coverage threshold failure was real and my local check had masked it via a grep pipeline (second occurrence of that verification mistake — checks now run with bare exit codes). Fixed before this round; this round's changes re-verified the same way.
+2. **Malformed reserve responses now DENY** in both fail modes: a garbled answer is an integrity failure, not an outage — enforcement is never granted on a response we cannot interpret. README's fail-open scope statement now matches.
+3. **Settlement responses are validated**: commit must confirm `COMMITTED`, release `RELEASED`, events `APPLIED` — anything else is malformed, state is retained, and the plugin never believes an unconfirmed settlement happened.
+4. **Cap-denial release failures no longer leak**: if returning the just-taken hold fails, the hold is recorded so SessionEnd retries it.
+5. **Caps surface via `additionalContext`** on stdout (the documented channel), emitted WITHOUT a permissionDecision so the normal permission flow is untouched; stderr was not transcript context.
+6. **Expired-reservation charging is durable**: before attempting the fallback usage event, the record is downgraded to `{type:"event"}` on disk; failed applications are retried by replayed Post hooks and by SessionEnd, which now settles typed records (release holds, apply events) and only removes state that actually settled.
+7. **Failure-hook 4xx discrimination**: only `RESERVATION_EXPIRED`/`RESERVATION_FINALIZED`/`NOT_FOUND` are terminal; auth/idempotency/invalid-request errors keep the record for retry.
+
+**Verified:** 53 tests, statements 98.19% / lines 99.5% / branches 88.63% (thresholds enforced, exit codes checked directly), lint clean. New tests: malformed-deny both modes, settlement-status validation, cap-release leak recording, additionalContext without decision, durable pending-event lifecycle including replayed-Post retry and SessionEnd application, corrupt state-file tolerance, correctable-vs-terminal 4xx in the failure hook.

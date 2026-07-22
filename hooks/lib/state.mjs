@@ -5,7 +5,7 @@
 // make remember (write) and take (read+unlink) independently atomic.
 // Server-side TTL reclaims anything a crashed session leaves behind.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, readdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,17 +17,25 @@ function sessionDir(sessionId) {
   return join(tmpdir(), "cycles-claude-plugin", sanitize(sessionId));
 }
 
-export function rememberReservation(sessionId, key, reservationId) {
+// Records are typed: { type: "hold", reservationId } for an open
+// reservation, { type: "event", toolName, amount } for an executed action
+// whose expired-reservation usage event has not been applied yet. Both must
+// survive failed settlements so SessionEnd can finish the job.
+export function writeRecord(sessionId, key, record) {
   const dir = sessionDir(sessionId);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, sanitize(key)), String(reservationId));
+  writeFileSync(join(dir, sanitize(key)), JSON.stringify(record));
 }
 
-// Read WITHOUT deleting: the record must survive a failed commit so that
-// SessionEnd can still release (or a retried Post hook can settle) the hold.
-export function peekReservation(sessionId, key) {
+export function rememberReservation(sessionId, key, reservationId) {
+  writeRecord(sessionId, key, { type: "hold", reservationId });
+}
+
+// Read WITHOUT deleting: the record must survive a failed settlement so that
+// SessionEnd can still settle it.
+export function peekRecord(sessionId, key) {
   try {
-    return readFileSync(join(sessionDir(sessionId), sanitize(key)), "utf8");
+    return JSON.parse(readFileSync(join(sessionDir(sessionId), sanitize(key)), "utf8"));
   } catch {
     return undefined;
   }
@@ -41,10 +49,16 @@ export function deleteReservation(sessionId, key) {
   }
 }
 
-export function pendingReservations(sessionId) {
+export function pendingRecords(sessionId) {
   const dir = sessionDir(sessionId);
   try {
-    return readdirSync(dir).map((name) => [name, readFileSync(join(dir, name), "utf8")]);
+    return readdirSync(dir).map((name) => {
+      try {
+        return [name, JSON.parse(readFileSync(join(dir, name), "utf8"))];
+      } catch {
+        return [name, undefined];
+      }
+    }).filter(([, record]) => record !== undefined);
   } catch {
     return [];
   }
@@ -55,5 +69,15 @@ export function clearState(sessionId) {
     rmSync(sessionDir(sessionId), { recursive: true, force: true });
   } catch {
     // best effort
+  }
+}
+
+// Session-end cleanup must NOT wipe records that failed to settle — only
+// remove the directory once everything in it has been handled.
+export function clearStateIfEmpty(sessionId) {
+  try {
+    rmdirSync(sessionDir(sessionId));
+  } catch {
+    // non-empty or already gone — either is fine
   }
 }

@@ -77,25 +77,42 @@ export async function run(input, env = process.env) {
     // layer can enforce mechanically); surface the rest to the transcript.
     const violation = capViolation(result.caps, toolName);
     if (violation) {
-      // Best-effort: return the hold we just took before blocking the call.
-      await release(config, {
-        reservationId: result.reservationId,
-        idempotencyKey: `${key}_r`,
-        reason: "denied by caps",
-      }).catch(() => {});
+      // Return the hold we just took before blocking the call; if the
+      // release fails, RECORD the hold so SessionEnd can retry — a failed
+      // best-effort release must not leak budget until TTL.
+      try {
+        await release(config, {
+          reservationId: result.reservationId,
+          idempotencyKey: `${key}_r`,
+          reason: "denied by caps",
+        });
+      } catch {
+        rememberReservation(input.session_id, key, result.reservationId);
+      }
       output("deny", `Cycles caps forbid this call: ${violation}. Respect the caps or choose an allowed tool.`);
       return;
     }
     rememberReservation(input.session_id, key, result.reservationId);
     if (result.decision === "ALLOW_WITH_CAPS" && result.caps) {
       const summary = capsSummary(result.caps);
-      if (summary) process.stderr.write(`cycles-plugin: ALLOW_WITH_CAPS — respect ${summary}\n`);
+      if (summary) {
+        // additionalContext is the documented channel for informing the
+        // model; stderr is not transcript context.
+        process.stdout.write(
+          JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              additionalContext: `Cycles ALLOW_WITH_CAPS — respect ${summary} while executing.`,
+            },
+          }),
+        );
+      }
     }
   } catch (err) {
     // An authoritative protocol rejection (4xx envelope: budget exhausted /
     // frozen / closed, debt, auth failure, invalid request) is the server
     // saying NO — never fail open on it.
-    if (err?.authoritative) {
+    if (err?.authoritative || err?.malformed) {
       output(
         "deny",
         `Cycles rejected ${toolName}: ${err.errorCode} — ${err.message}. Do not retry; resolve the budget/authorization state or stop.`,

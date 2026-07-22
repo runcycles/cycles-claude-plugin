@@ -5,7 +5,7 @@
 import { loadConfig, isConfigured } from "./lib/config.mjs";
 import { release } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
-import { peekReservation, deleteReservation } from "./lib/state.mjs";
+import { peekRecord, deleteReservation } from "./lib/state.mjs";
 import { CYCLES_TOOL_NS } from "./pre-tool-use.mjs";
 
 export async function run(input, env = process.env) {
@@ -20,23 +20,28 @@ export async function run(input, env = process.env) {
   if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
-  const reservationId = peekReservation(input.session_id, key);
-  if (!reservationId) return;
+  const record = peekRecord(input.session_id, key);
+  if (!record) return;
+  if (record.type === "event") return; // pending charge for an executed action — session end applies it
+
+  // Only these mean the hold is definitively gone server-side. Other 4xx
+  // (auth, idempotency mismatch, invalid request) are correctable — keep the
+  // record so SessionEnd retries the release.
+  const TERMINAL = new Set(["RESERVATION_EXPIRED", "RESERVATION_FINALIZED", "NOT_FOUND"]);
 
   try {
     await release(config, {
-      reservationId,
+      reservationId: record.reservationId,
       idempotencyKey: `${key}_r`,
       reason: "tool call failed",
     });
     deleteReservation(input.session_id, key);
   } catch (err) {
-    if (err?.authoritative) {
-      // Already finalized/expired — nothing left to hold either way.
+    if (TERMINAL.has(err?.errorCode)) {
       deleteReservation(input.session_id, key);
       return;
     }
-    process.stderr.write(`cycles-plugin: release failed for ${reservationId} (will retry at session end): ${err.message}\n`);
+    process.stderr.write(`cycles-plugin: release failed for ${record.reservationId} (will retry at session end): ${err.message}\n`);
   }
 }
 

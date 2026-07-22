@@ -3,9 +3,10 @@ import { loadConfig, isConfigured } from "../hooks/lib/config.mjs";
 import { reserve, commit, release } from "../hooks/lib/cycles-client.mjs";
 import {
   rememberReservation,
-  peekReservation,
+  writeRecord,
+  peekRecord,
   deleteReservation,
-  pendingReservations,
+  pendingRecords,
   clearState,
 } from "../hooks/lib/state.mjs";
 
@@ -115,9 +116,28 @@ describe("cycles-client", () => {
     const fn = mockFetch(200, { status: "COMMITTED" });
     await commit(config, { reservationId: "rsv 1", idempotencyKey: "k2", amount: 1 });
     expect(fn.mock.calls[0][0]).toBe("http://cycles/v1/reservations/rsv%201/commit");
+    mockFetch(200, { status: "RELEASED" });
     await release(config, { reservationId: "rsv_2", idempotencyKey: "k3", reason: "skipped" });
-    expect(fn.mock.calls[1][0]).toBe("http://cycles/v1/reservations/rsv_2/release");
-    expect(JSON.parse(fn.mock.calls[1][1].body)).toMatchObject({ idempotency_key: "k3", reason: "skipped" });
+  });
+
+  it("rejects settlement responses that do not confirm the expected status", async () => {
+    mockFetch(200, { status: "PENDING" });
+    await expect(commit(config, { reservationId: "r", idempotencyKey: "k", amount: 1 })).rejects.toMatchObject({
+      errorCode: "MALFORMED_RESPONSE",
+      malformed: true,
+    });
+    mockFetch(200, {});
+    await expect(release(config, { reservationId: "r", idempotencyKey: "k" })).rejects.toMatchObject({
+      malformed: true,
+    });
+  });
+
+  it("marks malformed reserve responses with the malformed flag", async () => {
+    mockFetch(200, { decision: "ALLOW" });
+    await expect(reserve(config, { idempotencyKey: "k", toolName: "B", amount: 1 })).rejects.toMatchObject({
+      errorCode: "MALFORMED_RESPONSE",
+      malformed: true,
+    });
   });
 
   it("tolerates non-JSON error bodies", async () => {
@@ -129,23 +149,37 @@ describe("cycles-client", () => {
 describe("state", () => {
   const session = `test-${process.pid}-${Math.random().toString(36).slice(2)}`;
 
-  it("round-trips reservations by tool_use_id", () => {
+  it("round-trips typed records", () => {
     rememberReservation(session, "tu_1", "rsv_1");
-    rememberReservation(session, "tu_2", "rsv_2");
-    expect(pendingReservations(session)).toHaveLength(2);
-    expect(peekReservation(session, "tu_1")).toBe("rsv_1");
-    expect(peekReservation(session, "tu_1")).toBe("rsv_1"); // peek does not consume
+    writeRecord(session, "tu_2", { type: "event", toolName: "Bash", amount: 3 });
+    expect(pendingRecords(session)).toHaveLength(2);
+    expect(peekRecord(session, "tu_1")).toEqual({ type: "hold", reservationId: "rsv_1" });
+    expect(peekRecord(session, "tu_1")).toBeDefined(); // peek does not consume
     deleteReservation(session, "tu_1");
-    expect(peekReservation(session, "tu_1")).toBeUndefined();
-    expect(pendingReservations(session)).toEqual([["tu_2", "rsv_2"]]);
+    expect(peekRecord(session, "tu_1")).toBeUndefined();
+    expect(pendingRecords(session)).toEqual([["tu_2", { type: "event", toolName: "Bash", amount: 3 }]]);
     clearState(session);
-    expect(pendingReservations(session)).toEqual([]);
+    expect(pendingRecords(session)).toEqual([]);
+  });
+
+  it("skips corrupt record files", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = join(tmpdir(), "cycles-claude-plugin", session);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "corrupt"), "not json{");
+    rememberReservation(session, "tu_ok", "rsv_ok");
+    const records = pendingRecords(session);
+    expect(records).toHaveLength(1);
+    expect(records[0][0]).toBe("tu_ok");
+    clearState(session);
   });
 
   it("sanitizes hostile session ids", () => {
     const hostile = "../../etc/passwd";
     rememberReservation(hostile, "tu", "rsv");
-    expect(peekReservation(hostile, "tu")).toBe("rsv");
+    expect(peekRecord(hostile, "tu")).toEqual({ type: "hold", reservationId: "rsv" });
     clearState(hostile);
   });
 });

@@ -1,10 +1,12 @@
-// SessionEnd: release any reservations whose PostToolUse never ran (crash,
-// interrupt, denied-then-abandoned). Server-side TTL would reclaim them
-// anyway; releasing promptly returns the held budget to the pool now.
+// SessionEnd: settle whatever the per-call hooks could not — release open
+// holds, apply pending usage events (actions that ran but whose expired-
+// reservation charge has not been applied yet). Server-side TTL reclaims any
+// hold this misses; pending events are retried here because nothing else
+// will charge them.
 
 import { loadConfig, isConfigured } from "./lib/config.mjs";
-import { release } from "./lib/cycles-client.mjs";
-import { pendingReservations, clearState } from "./lib/state.mjs";
+import { release, createEvent } from "./lib/cycles-client.mjs";
+import { pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
 
 export async function run(input, env = process.env) {
   let config;
@@ -15,21 +17,36 @@ export async function run(input, env = process.env) {
   }
   if (!isConfigured(config)) return;
 
-  for (const [key, reservationId] of pendingReservations(input.session_id)) {
+  for (const [key, record] of pendingRecords(input.session_id)) {
     try {
-      await release(config, {
-        reservationId,
-        idempotencyKey: `${key}_sr`,
-        reason: "claude-code session ended",
-      });
+      if (record.type === "event") {
+        await createEvent(config, {
+          idempotencyKey: `${key}_e`,
+          toolName: record.toolName,
+          amount: record.amount,
+        });
+      } else {
+        await release(config, {
+          reservationId: record.reservationId,
+          idempotencyKey: `${key}_sr`,
+          reason: "claude-code session ended",
+        });
+      }
+      deleteReservation(input.session_id, key);
     } catch (err) {
-      process.stderr.write(`cycles-plugin: release failed for ${reservationId}: ${err.message}\n`);
+      if (record.type !== "event" && err?.authoritative) {
+        // Hold already finalized/expired server-side — nothing left to free.
+        deleteReservation(input.session_id, key);
+        continue;
+      }
+      process.stderr.write(`cycles-plugin: session-end settlement failed for ${key}: ${err.message}
+`);
     }
   }
-  clearState(input.session_id);
+  clearStateIfEmpty(input.session_id);
 }
 
-/* v8 ignore start -- process-level entry, covered by integration run */
+/* v8 ignore start -- process-level entry, covered by tests/e2e.test.mjs */
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop())) {
   const raw = await new Promise((resolve) => {
     let data = "";
@@ -39,7 +56,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
   try {
     await run(JSON.parse(raw));
   } catch (err) {
-    process.stderr.write(`cycles-plugin: ${err?.message ?? err}\n`);
+    process.stderr.write(`cycles-plugin: ${err?.message ?? err}
+`);
   }
 }
 /* v8 ignore stop */

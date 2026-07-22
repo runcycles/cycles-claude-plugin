@@ -45,6 +45,24 @@ function normalizeCaps(caps) {
 
 const VALID_DECISIONS = new Set(["ALLOW", "ALLOW_WITH_CAPS", "DENY"]);
 
+// A response we cannot interpret is an INTEGRITY failure, not an outage:
+// enforcement must never be granted on a garbled answer. Callers treat
+// malformed reserve responses as deny-class; malformed settlement responses
+// as retain-state (retry at session end).
+function malformed(message) {
+  const err = new Error(message);
+  err.errorCode = "MALFORMED_RESPONSE";
+  err.malformed = true;
+  return err;
+}
+
+function expectStatus(json, expected, what) {
+  if (json?.status !== expected) {
+    throw malformed(`Cycles ${what} did not confirm ${expected} (got ${JSON.stringify(json?.status)})`);
+  }
+  return json;
+}
+
 export async function reserve(config, { idempotencyKey, toolName, amount }) {
   const json = await post(config, "/v1/reservations", {
     idempotency_key: idempotencyKey,
@@ -56,14 +74,10 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
   // Validate the success response: a malformed 200 must never be treated as
   // an ALLOW (and "undefined" must never become a reservation id).
   if (!VALID_DECISIONS.has(json.decision)) {
-    const err = new Error(`Cycles returned a malformed reserve response (decision: ${JSON.stringify(json.decision)})`);
-    err.errorCode = "MALFORMED_RESPONSE";
-    throw err;
+    throw malformed(`Cycles returned a malformed reserve response (decision: ${JSON.stringify(json.decision)})`);
   }
   if (json.decision !== "DENY" && (typeof json.reservation_id !== "string" || json.reservation_id === "")) {
-    const err = new Error("Cycles returned ALLOW without a reservation_id");
-    err.errorCode = "MALFORMED_RESPONSE";
-    throw err;
+    throw malformed("Cycles returned ALLOW without a reservation_id");
   }
   return {
     decision: json.decision,
@@ -74,27 +88,30 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
 }
 
 export async function commit(config, { reservationId, idempotencyKey, amount }) {
-  return post(config, `/v1/reservations/${encodeURIComponent(reservationId)}/commit`, {
+  const json = await post(config, `/v1/reservations/${encodeURIComponent(reservationId)}/commit`, {
     idempotency_key: idempotencyKey,
     actual: { unit: config.unit, amount },
   });
+  return expectStatus(json, "COMMITTED", "commit");
 }
 
 export async function release(config, { reservationId, idempotencyKey, reason }) {
-  return post(config, `/v1/reservations/${encodeURIComponent(reservationId)}/release`, {
+  const json = await post(config, `/v1/reservations/${encodeURIComponent(reservationId)}/release`, {
     idempotency_key: idempotencyKey,
     reason,
   });
+  return expectStatus(json, "RELEASED", "release");
 }
 
 // Fire-and-forget usage event — the fallback charge when a reservation
 // expired before commit (long tool run / permission prompt): the action DID
 // execute, so the usage must still be recorded.
 export async function createEvent(config, { idempotencyKey, toolName, amount }) {
-  return post(config, "/v1/events", {
+  const json = await post(config, "/v1/events", {
     idempotency_key: idempotencyKey,
     subject: config.subject,
     action: { kind: "tool.call", name: toolName },
     actual: { unit: config.unit, amount },
   });
+  return expectStatus(json, "APPLIED", "event");
 }
