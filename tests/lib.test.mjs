@@ -3,7 +3,8 @@ import { loadConfig, isConfigured } from "../hooks/lib/config.mjs";
 import { reserve, commit, release } from "../hooks/lib/cycles-client.mjs";
 import {
   rememberReservation,
-  takeReservation,
+  peekReservation,
+  deleteReservation,
   pendingReservations,
   clearState,
 } from "../hooks/lib/state.mjs";
@@ -132,8 +133,10 @@ describe("state", () => {
     rememberReservation(session, "tu_1", "rsv_1");
     rememberReservation(session, "tu_2", "rsv_2");
     expect(pendingReservations(session)).toHaveLength(2);
-    expect(takeReservation(session, "tu_1")).toBe("rsv_1");
-    expect(takeReservation(session, "tu_1")).toBeUndefined();
+    expect(peekReservation(session, "tu_1")).toBe("rsv_1");
+    expect(peekReservation(session, "tu_1")).toBe("rsv_1"); // peek does not consume
+    deleteReservation(session, "tu_1");
+    expect(peekReservation(session, "tu_1")).toBeUndefined();
     expect(pendingReservations(session)).toEqual([["tu_2", "rsv_2"]]);
     clearState(session);
     expect(pendingReservations(session)).toEqual([]);
@@ -142,7 +145,7 @@ describe("state", () => {
   it("sanitizes hostile session ids", () => {
     const hostile = "../../etc/passwd";
     rememberReservation(hostile, "tu", "rsv");
-    expect(takeReservation(hostile, "tu")).toBe("rsv");
+    expect(peekReservation(hostile, "tu")).toBe("rsv");
     clearState(hostile);
   });
 });

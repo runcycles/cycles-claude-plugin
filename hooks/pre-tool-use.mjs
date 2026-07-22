@@ -4,9 +4,14 @@
 // cannot provide (see the server README's Security Model section).
 
 import { loadConfig, isConfigured } from "./lib/config.mjs";
-import { reserve } from "./lib/cycles-client.mjs";
+import { reserve, release } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
 import { rememberReservation } from "./lib/state.mjs";
+
+// Exact namespaces of the Cycles budget tools (recursion guard). Deliberately
+// NOT a substring match: `mcp__bicycles__deploy` must be gated like any other
+// tool. Covers the plugin-bundled server and a user-configured `cycles` server.
+export const CYCLES_TOOL_NS = /^mcp__(plugin_cycles-budget-guard_)?cycles__/;
 
 function output(decision, reason) {
   const hookSpecificOutput = {
@@ -15,6 +20,25 @@ function output(decision, reason) {
   };
   if (reason !== undefined) hookSpecificOutput.permissionDecisionReason = reason;
   process.stdout.write(JSON.stringify({ hookSpecificOutput }));
+}
+
+function capViolation(caps, toolName) {
+  if (!caps) return undefined;
+  if (Array.isArray(caps.toolDenylist) && caps.toolDenylist.includes(toolName)) {
+    return `tool ${toolName} is on the Cycles tool_denylist`;
+  }
+  if (Array.isArray(caps.toolAllowlist) && caps.toolAllowlist.length > 0 && !caps.toolAllowlist.includes(toolName)) {
+    return `tool ${toolName} is not on the Cycles tool_allowlist`;
+  }
+  return undefined;
+}
+
+function capsSummary(caps) {
+  const parts = [];
+  if (typeof caps.maxTokens === "number") parts.push(`maxTokens=${caps.maxTokens}`);
+  if (typeof caps.maxStepsRemaining === "number") parts.push(`maxStepsRemaining=${caps.maxStepsRemaining}`);
+  if (typeof caps.cooldownMs === "number") parts.push(`cooldownMs=${caps.cooldownMs}`);
+  return parts.join(", ");
 }
 
 export async function run(input, env = process.env) {
@@ -33,9 +57,7 @@ export async function run(input, env = process.env) {
 
   if (!isConfigured(config)) return; // not set up — normal permission flow
   const toolName = String(input.tool_name ?? "");
-  // Never gate the Cycles budget tools themselves (recursion guard), nor
-  // operator-excluded tools.
-  if (/cycles/i.test(toolName) || config.skipTools.test(toolName)) return;
+  if (CYCLES_TOOL_NS.test(toolName) || config.skipTools.test(toolName)) return;
 
   const key = toolCallKey(input);
   try {
@@ -51,25 +73,44 @@ export async function run(input, env = process.env) {
       );
       return;
     }
+    // ALLOW_WITH_CAPS: enforce tool allow/deny lists here (the one cap this
+    // layer can enforce mechanically); surface the rest to the transcript.
+    const violation = capViolation(result.caps, toolName);
+    if (violation) {
+      // Best-effort: return the hold we just took before blocking the call.
+      await release(config, {
+        reservationId: result.reservationId,
+        idempotencyKey: `${key}_r`,
+        reason: "denied by caps",
+      }).catch(() => {});
+      output("deny", `Cycles caps forbid this call: ${violation}. Respect the caps or choose an allowed tool.`);
+      return;
+    }
     rememberReservation(input.session_id, key, result.reservationId);
-    // ALLOW / ALLOW_WITH_CAPS: let the normal permission flow continue.
+    if (result.decision === "ALLOW_WITH_CAPS" && result.caps) {
+      const summary = capsSummary(result.caps);
+      if (summary) process.stderr.write(`cycles-plugin: ALLOW_WITH_CAPS — respect ${summary}\n`);
+    }
   } catch (err) {
-    if (err?.errorCode === "BUDGET_EXCEEDED") {
+    // An authoritative protocol rejection (4xx envelope: budget exhausted /
+    // frozen / closed, debt, auth failure, invalid request) is the server
+    // saying NO — never fail open on it.
+    if (err?.authoritative) {
       output(
         "deny",
-        `Cycles budget EXHAUSTED for ${toolName}. Do not retry; reduce scope or stop and report the budget limit.`,
+        `Cycles rejected ${toolName}: ${err.errorCode} — ${err.message}. Do not retry; resolve the budget/authorization state or stop.`,
       );
       return;
     }
     if (config.failClosed) {
-      output("deny", `Cycles server unreachable and CYCLES_CC_FAIL_CLOSED=true: ${err.message}`);
+      output("deny", `Cycles server unavailable and CYCLES_CC_FAIL_CLOSED=true: ${err.message}`);
       return;
     }
     process.stderr.write(`cycles-plugin: reserve failed (allowing, fail-open): ${err.message}\n`);
   }
 }
 
-/* v8 ignore start -- process-level entry, covered by integration run */
+/* v8 ignore start -- process-level entry, covered by tests/e2e.test.mjs */
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop())) {
   const raw = await new Promise((resolve) => {
     let data = "";

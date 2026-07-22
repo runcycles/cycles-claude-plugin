@@ -23,14 +23,21 @@ export function rememberReservation(sessionId, key, reservationId) {
   writeFileSync(join(dir, sanitize(key)), String(reservationId));
 }
 
-export function takeReservation(sessionId, key) {
-  const file = join(sessionDir(sessionId), sanitize(key));
+// Read WITHOUT deleting: the record must survive a failed commit so that
+// SessionEnd can still release (or a retried Post hook can settle) the hold.
+export function peekReservation(sessionId, key) {
   try {
-    const reservationId = readFileSync(file, "utf8");
-    unlinkSync(file);
-    return reservationId;
+    return readFileSync(join(sessionDir(sessionId), sanitize(key)), "utf8");
   } catch {
     return undefined;
+  }
+}
+
+export function deleteReservation(sessionId, key) {
+  try {
+    unlinkSync(join(sessionDir(sessionId), sanitize(key)));
+  } catch {
+    // already gone
   }
 }
 

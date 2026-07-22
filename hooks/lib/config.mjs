@@ -3,6 +3,12 @@
 
 const SUBJECT_FIELDS = ["tenant", "workspace", "app", "workflow", "agent", "toolset"];
 
+function clampInt(raw, fallback, min, max) {
+  const n = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(n) || n < min || n > max) return fallback;
+  return n;
+}
+
 export function loadConfig(env = process.env) {
   const baseUrl = (env.CYCLES_BASE_URL ?? "").replace(/\/+$/, "");
   const subject = {};
@@ -35,7 +41,10 @@ export function loadConfig(env = process.env) {
     // tool call and surface a warning. Set CYCLES_CC_FAIL_CLOSED=true to
     // block instead (strict enforcement).
     failClosed: env.CYCLES_CC_FAIL_CLOSED === "true",
-    ttlMs: 300_000,
+    // Reservation TTL must survive permission prompts and long-running
+    // tools; expiry before commit means the action ran but usage charging
+    // falls back to a usage event. Spec cap is 86400000.
+    ttlMs: clampInt(env.CYCLES_CC_TTL_MS, 1_800_000, 1000, 86_400_000),
   };
 }
 

@@ -19,7 +19,7 @@ export async function run(input, env = process.env) {
     try {
       await release(config, {
         reservationId,
-        idempotencyKey: `${key}_r`,
+        idempotencyKey: `${key}_sr`,
         reason: "claude-code session ended",
       });
     } catch (err) {

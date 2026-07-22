@@ -22,7 +22,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@runcycles/mcp-server"
+        "@runcycles/mcp-server@0.6.0"
       ]
     }
   }
