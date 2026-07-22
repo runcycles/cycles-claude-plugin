@@ -1,8 +1,8 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
-**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8 and metadata release review)
+**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8, metadata release review, and operational hardening)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
-**Plugin:** `cycles-budget-guard` v0.1.1 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
+**Plugin:** `cycles-budget-guard` v0.2.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
 
 ## Current design (authoritative — supersedes anything below that contradicts it)
 
@@ -20,9 +20,19 @@
 
 ## Current verification (2026-07-22)
 
-75 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
+78 tests across unit + checked-in e2e (real hook processes against a live HTTP server) plus secret-redaction diagnostics; coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × Ubuntu/Windows/macOS, strict Claude plugin validation, metadata consistency, and isolated install smoke testing.
 
 ## History (appended review rounds; superseded statements above)
+
+---
+
+## Operational Hardening Review (2026-07-22)
+
+1. **Marketplace-aware CI:** strict Claude plugin validation, metadata/version consistency, an isolated fresh-install test, macOS coverage, and scheduled public-repository installation checks now catch packaging failures before users do.
+2. **Dependency operations:** Dependabot covers npm and GitHub Actions, while a scheduled check opens an issue when the exactly pinned companion MCP server falls behind npm.
+3. **Secret-safe diagnostics:** `/cycles-budget-guard:doctor` uses the production parser and emits only effective posture plus an API-key-present boolean; tests assert the credential value never appears.
+4. **Maintainer and user experience:** repository-specific security guidance, ownership, issue forms, architecture, quickstart, denial proof, and troubleshooting make support actionable without weakening privacy.
+5. **Repository governance:** protected-main and merge-hygiene settings require reviewable, green changes while preserving an administrator recovery path.
 
 ---
 

@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose an enforcement, policy, diagnostics, or usability improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What workflow or enforcement gap should the plugin address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the desired operator and Claude Code experience.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and bypass considerations
+      description: Could this weaken gating, expose data, or create a model-controlled bypass?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

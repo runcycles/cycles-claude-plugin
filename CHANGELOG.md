@@ -2,6 +2,20 @@
 
 All notable changes to Cycles Budget Guard are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-07-22
+
+### Added
+
+- Add a secret-safe `/cycles-budget-guard:doctor` command backed by the production configuration parser.
+- Add macOS coverage, strict Claude plugin validation, metadata consistency enforcement, local installation smoke testing, and scheduled public-repository installation testing.
+- Add weekly npm and GitHub Actions dependency updates plus monitoring for newer companion MCP server releases.
+- Add an architecture diagram, five-minute quickstart, concrete denial proof, troubleshooting guide, security policy, code ownership, and structured issue forms.
+
+### Repository operations
+
+- Protect `main` with pull-request, status-check, and conversation-resolution requirements.
+- Enable automatic merged-branch deletion and Dependabot security updates.
+
 ## [0.1.1] - 2026-07-22
 
 ### Security and reliability
@@ -18,3 +32,4 @@ All notable changes to Cycles Budget Guard are documented here. This project fol
 - Add README badges, audience guidance, an enforcement verification flow, canonical resources, and a GitHub social-preview asset.
 
 [0.1.1]: https://github.com/runcycles/cycles-claude-plugin/releases/tag/v0.1.1
+[0.2.0]: https://github.com/runcycles/cycles-claude-plugin/releases/tag/v0.2.0

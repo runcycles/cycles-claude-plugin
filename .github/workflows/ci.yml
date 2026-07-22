@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -14,7 +15,7 @@ jobs:
     strategy:
       matrix:
         node: [22, 24]
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     name: Test (Node ${{ matrix.node }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     steps:
@@ -26,3 +27,17 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run test:coverage
+
+  validate-plugin:
+    name: Validate Claude plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --global @anthropic-ai/claude-code@2.1.217
+      - run: claude plugin validate . --strict
+      - run: npm run check:metadata
+      - run: npm run smoke:install

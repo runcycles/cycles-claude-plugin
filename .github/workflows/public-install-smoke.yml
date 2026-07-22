@@ -1,0 +1,26 @@
+name: Public install smoke
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install from public marketplace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --global @anthropic-ai/claude-code@2.1.217
+      - run: npm run smoke:install
+        env:
+          MARKETPLACE_SOURCE: runcycles/cycles-claude-plugin

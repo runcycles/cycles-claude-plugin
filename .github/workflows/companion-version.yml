@@ -1,0 +1,46 @@
+name: Companion MCP version
+
+on:
+  schedule:
+    - cron: "41 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Check pinned companion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - id: versions
+        name: Compare current and latest versions
+        shell: bash
+        run: |
+          current="$(node -e 'const p=require("./.claude-plugin/plugin.json"); const arg=p.mcpServers.cycles.args.find((v)=>v.startsWith("@runcycles/mcp-server@")); process.stdout.write(arg.split("@").at(-1))')"
+          latest="$(npm view @runcycles/mcp-server version)"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [[ "$current" != "$latest" ]]; then
+            echo "outdated=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open an update issue
+        if: steps.versions.outputs.outdated == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_VERSION: ${{ steps.versions.outputs.current }}
+          LATEST_VERSION: ${{ steps.versions.outputs.latest }}
+        run: |
+          existing="$(gh issue list --state open --search 'Update @runcycles/mcp-server in:title' --json number --jq 'length')"
+          if [[ "$existing" == "0" ]]; then
+            gh issue create \
+              --title "Update @runcycles/mcp-server to $LATEST_VERSION" \
+              --body "The plugin pins @runcycles/mcp-server@$CURRENT_VERSION, while npm reports $LATEST_VERSION. Review the companion release, update the exact pin, bump the plugin version, and run the full enforcement test suite before merging."
+          fi
