@@ -25,7 +25,7 @@ flowchart LR
     G --> H
 ```
 
-The model never decides whether the gate runs. Claude Code invokes the hook synchronously before dispatch, and only a confirmed reservation lets a gated tool proceed.
+The model never decides whether the gate runs. Claude Code invokes the hook synchronously before dispatch. In normal operation, only a confirmed reservation lets a gated tool proceed; during a 5xx, network, or timeout outage, the default fail-open posture permits the call with a warning unless `CYCLES_CC_FAIL_CLOSED=true`.
 
 ## Who it is for
 

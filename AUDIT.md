@@ -20,7 +20,7 @@
 
 ## Current verification (2026-07-22)
 
-78 tests across unit + checked-in e2e (real hook processes against a live HTTP server) plus secret-redaction diagnostics; coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × Ubuntu/Windows/macOS, strict Claude plugin validation, metadata consistency, and isolated install smoke testing.
+79 tests across unit + checked-in e2e (real hook processes against a live HTTP server), secret-redaction diagnostics, and bounded install-smoke execution; coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × Ubuntu/Windows/macOS, strict Claude plugin validation, metadata consistency, and isolated install smoke testing.
 
 ## History (appended review rounds; superseded statements above)
 
@@ -28,11 +28,12 @@
 
 ## Operational Hardening Review (2026-07-22)
 
-1. **Marketplace-aware CI:** strict Claude plugin validation, metadata/version consistency, an isolated fresh-install test, macOS coverage, and scheduled public-repository installation checks now catch packaging failures before users do.
+1. **Marketplace-aware CI:** strict validation targets both the plugin and marketplace manifests, metadata/version consistency and an isolated fresh-install test catch packaging failures, and Node 22/24 coverage spans Ubuntu, Windows, and macOS. Project instructions live at `.claude/CLAUDE.md`, where Claude Code loads them without presenting ignored plugin-root context.
 2. **Dependency operations:** Dependabot covers npm and GitHub Actions, while a scheduled check opens an issue when the exactly pinned companion MCP server falls behind npm.
 3. **Secret-safe diagnostics:** `/cycles-budget-guard:doctor` uses the production parser and emits only effective posture plus an API-key-present boolean; tests assert the credential value never appears.
 4. **Maintainer and user experience:** repository-specific security guidance, ownership, issue forms, architecture, quickstart, denial proof, and troubleshooting make support actionable without weakening privacy.
 5. **Repository governance:** protected-main and merge-hygiene settings require reviewable, green changes while preserving an administrator recovery path.
+6. **Self-review remediation:** enforcement documentation states the default fail-open outage exception at the architecture boundary; smoke-test subprocesses and jobs are time-bounded; scheduled public-repository installs run against the current Claude Code release while PR validation stays exactly pinned for reproducibility.
 
 ---
 

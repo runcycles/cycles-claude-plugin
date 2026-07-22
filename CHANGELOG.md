@@ -7,7 +7,7 @@ All notable changes to Cycles Budget Guard are documented here. This project fol
 ### Added
 
 - Add a secret-safe `/cycles-budget-guard:doctor` command backed by the production configuration parser.
-- Add macOS coverage, strict Claude plugin validation, metadata consistency enforcement, local installation smoke testing, and scheduled public-repository installation testing.
+- Add macOS coverage, strict plugin and marketplace validation, metadata consistency enforcement, bounded local installation smoke testing, and scheduled public-repository installation testing against the current Claude Code release.
 - Add weekly npm and GitHub Actions dependency updates plus monitoring for newer companion MCP server releases.
 - Add an architecture diagram, five-minute quickstart, concrete denial proof, troubleshooting guide, security policy, code ownership, and structured issue forms.
 
