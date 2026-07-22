@@ -1,0 +1,27 @@
+{
+  "name": "@runcycles/cycles-claude-plugin",
+  "version": "0.1.0",
+  "description": "Claude Code plugin: hard budget enforcement for tool calls via Cycles",
+  "license": "Apache-2.0",
+  "author": "runcycles",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/runcycles/cycles-claude-plugin.git"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint hooks/"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.1.0",
+    "eslint": "^10.0.3",
+    "vitest": "^4.1.0"
+  }
+}

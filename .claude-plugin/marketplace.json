@@ -1,0 +1,18 @@
+{
+  "name": "runcycles",
+  "owner": {
+    "name": "runcycles",
+    "email": "hello@runcycles.io"
+  },
+  "description": "Cycles — runtime budget authority for AI agents",
+  "plugins": [
+    {
+      "name": "cycles-budget-guard",
+      "displayName": "Cycles Budget Guard",
+      "source": "./",
+      "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating, usage metering, low-budget hints, and the full Cycles MCP toolset.",
+      "version": "0.1.0",
+      "author": { "name": "runcycles" }
+    }
+  ]
+}

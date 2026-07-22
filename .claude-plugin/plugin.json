@@ -1,0 +1,28 @@
+{
+  "name": "cycles-budget-guard",
+  "displayName": "Cycles Budget Guard",
+  "version": "0.1.0",
+  "description": "Hard budget enforcement for Claude Code tool calls via Cycles: PreToolUse gating (non-bypassable), usage metering, low-budget hints, and the full Cycles MCP toolset.",
+  "author": {
+    "name": "runcycles",
+    "url": "https://runcycles.io"
+  },
+  "homepage": "https://runcycles.io",
+  "repository": "https://github.com/runcycles/cycles-claude-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["budget", "cost-control", "governance", "cycles"],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "cycles": {
+      "command": "npx",
+      "args": ["-y", "@runcycles/mcp-server"],
+      "env": {
+        "CYCLES_BASE_URL": "${CYCLES_BASE_URL}",
+        "CYCLES_API_KEY": "${CYCLES_API_KEY}",
+        "CYCLES_DEFAULT_TENANT": "${CYCLES_DEFAULT_TENANT}",
+        "CYCLES_DEFAULT_WORKSPACE": "${CYCLES_DEFAULT_WORKSPACE}",
+        "CYCLES_DEFAULT_APP": "${CYCLES_DEFAULT_APP}"
+      }
+    }
+  }
+}
