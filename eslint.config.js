@@ -7,7 +7,7 @@ export default [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",
-      globals: { process: "readonly", fetch: "readonly" },
+      globals: { process: "readonly", fetch: "readonly", AbortSignal: "readonly" },
     },
   },
 ];
