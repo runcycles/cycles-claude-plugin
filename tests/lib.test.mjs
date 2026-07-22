@@ -2,7 +2,6 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { loadConfig, isConfigured } from "../hooks/lib/config.mjs";
 import { reserve, commit, release } from "../hooks/lib/cycles-client.mjs";
 import {
-  readState,
   rememberReservation,
   takeReservation,
   pendingReservations,
@@ -49,6 +48,16 @@ describe("loadConfig", () => {
     expect(c.skipTools.test("Bash")).toBe(false);
   });
 
+  it("default skip list covers local read-only tools but not actions", () => {
+    const c = loadConfig({});
+    for (const skipped of ["Read", "Glob", "Grep", "LS", "NotebookRead", "TodoWrite", "AskUserQuestion"]) {
+      expect(c.skipTools.test(skipped), skipped).toBe(true);
+    }
+    for (const gated of ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task"]) {
+      expect(c.skipTools.test(gated), gated).toBe(false);
+    }
+  });
+
   it("falls back to cost 1 on garbage", () => {
     expect(loadConfig({ CYCLES_CC_COST: "banana" }).cost).toBe(1);
     expect(loadConfig({ CYCLES_CC_COST: "-3" }).cost).toBe(1);
@@ -81,6 +90,8 @@ describe("cycles-client", () => {
     const [url, init] = fn.mock.calls[0];
     expect(url).toBe("http://cycles/v1/reservations");
     expect(init.headers["x-cycles-api-key"]).toBe("key1");
+    // dispatch-path deadline: a black-holed server must not hang tool calls
+    expect(init.signal).toBeInstanceOf(AbortSignal);
     const body = JSON.parse(init.body);
     expect(body).toMatchObject({
       idempotency_key: "k1",
@@ -125,7 +136,7 @@ describe("state", () => {
     expect(takeReservation(session, "tu_1")).toBeUndefined();
     expect(pendingReservations(session)).toEqual([["tu_2", "rsv_2"]]);
     clearState(session);
-    expect(readState(session)).toEqual({ reservations: {} });
+    expect(pendingReservations(session)).toEqual([]);
   });
 
   it("sanitizes hostile session ids", () => {

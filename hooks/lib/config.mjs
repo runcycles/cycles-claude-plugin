@@ -20,9 +20,15 @@ export function loadConfig(env = process.env) {
     baseUrl,
     apiKey: env.CYCLES_API_KEY ?? "",
     subject,
-    // Enforcement is skipped for tools matching this pattern. The cycles MCP
-    // tools are ALWAYS skipped regardless (recursion guard in the hook).
-    skipTools: new RegExp(env.CYCLES_CC_SKIP_TOOLS ?? "^(TodoWrite|AskUserQuestion)$"),
+    // Enforcement is skipped for tools matching this pattern. Default skips
+    // local zero-cost read-only tools — gating them adds an HTTP round trip
+    // per file read and pollutes the budget signal with non-actions. The
+    // cycles MCP tools are ALWAYS skipped regardless (recursion guard in the
+    // hook). Operators can tighten or loosen via CYCLES_CC_SKIP_TOOLS.
+    skipTools: new RegExp(
+      env.CYCLES_CC_SKIP_TOOLS ??
+        "^(Read|Glob|Grep|LS|NotebookRead|TodoWrite|AskUserQuestion)$",
+    ),
     unit: env.CYCLES_CC_UNIT ?? "CREDITS",
     cost: Number.isFinite(cost) && cost > 0 ? cost : 1,
     // Fail-open by default: if the Cycles server is unreachable, allow the

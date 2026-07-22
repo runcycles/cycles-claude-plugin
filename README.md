@@ -34,14 +34,15 @@ If `CYCLES_BASE_URL` or a subject default is missing, the plugin stays dormant (
 |---|---|---|
 | `CYCLES_CC_UNIT` | `CREDITS` | Unit charged per tool call |
 | `CYCLES_CC_COST` | `1` | Flat cost reserved+committed per tool call |
-| `CYCLES_CC_SKIP_TOOLS` | `^(TodoWrite\|AskUserQuestion)$` | Regex of tool names never gated |
+| `CYCLES_CC_SKIP_TOOLS` | `^(Read\|Glob\|Grep\|LS\|NotebookRead\|TodoWrite\|AskUserQuestion)$` | Regex of tool names never gated (default: local zero-cost reads) |
 | `CYCLES_CC_FAIL_CLOSED` | `false` | `true` blocks tool calls when the Cycles server is unreachable |
 
 Cycles' own budget tools are never gated (recursion guard), regardless of `CYCLES_CC_SKIP_TOOLS`.
 
 ## Semantics worth knowing
 
-- **Fail-open by default**: an unreachable Cycles server allows the call and logs a warning. Enterprises wanting strict enforcement set `CYCLES_CC_FAIL_CLOSED=true`.
+- **Bounded latency**: every Cycles request carries a 4-second deadline, so a black-holed server can never hang tool dispatch.
+- **Fail-open by default**: an unreachable (or timed-out) Cycles server allows the call and logs a warning. Enterprises wanting strict enforcement set `CYCLES_CC_FAIL_CLOSED=true`.
 - **Identity & retries**: the idempotency key is a hash of `(session, prompt, tool, arguments)`. A retried identical call replays the same reservation server-side. Known limit: two *deliberately identical* calls in one prompt turn share a reservation — the pair under-counts by one flat cost; it never over-charges.
 - **Units**: flat per-call cost is deliberate for v0.1 — tool calls don't carry token counts. Meter LLM spend itself with the Cycles integrations for your model gateway, and use this plugin for action-level authority.
 
