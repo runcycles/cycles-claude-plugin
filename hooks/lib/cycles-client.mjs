@@ -6,6 +6,11 @@ function subjectToWire(subject) {
   return subject;
 }
 
+// Hooks run synchronously in the tool-dispatch path — without a deadline, a
+// black-holed server would hang every tool call. 4s keeps worst-case latency
+// bounded; fail-open/fail-closed semantics then apply as usual.
+const REQUEST_TIMEOUT_MS = 4000;
+
 async function post(config, path, body) {
   const res = await fetch(`${config.baseUrl}${path}`, {
     method: "POST",
@@ -14,6 +19,7 @@ async function post(config, path, body) {
       "x-cycles-api-key": config.apiKey,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {

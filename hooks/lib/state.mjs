@@ -1,57 +1,51 @@
-// Per-session reservation state, keyed by tool_use_id. Lives in the OS temp
-// dir so PreToolUse and PostToolUse (separate processes) share it, and so a
-// crashed session leaves nothing behind but a small JSON file whose
-// reservations TTL-expire server-side anyway.
+// Per-session reservation state shared between PreToolUse and PostToolUse
+// (separate processes). ONE FILE PER RESERVATION, named by the identity key:
+// Claude Code runs tool calls in parallel, so a single JSON file with
+// read-modify-write would lose reservations under concurrency; per-key files
+// make remember (write) and take (read+unlink) independently atomic.
+// Server-side TTL reclaims anything a crashed session leaves behind.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function stateDir() {
-  return join(tmpdir(), "cycles-claude-plugin");
+function sanitize(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function stateFile(sessionId) {
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(stateDir(), `${safe}.json`);
+function sessionDir(sessionId) {
+  return join(tmpdir(), "cycles-claude-plugin", sanitize(sessionId));
 }
 
-export function readState(sessionId) {
+export function rememberReservation(sessionId, key, reservationId) {
+  const dir = sessionDir(sessionId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, sanitize(key)), String(reservationId));
+}
+
+export function takeReservation(sessionId, key) {
+  const file = join(sessionDir(sessionId), sanitize(key));
   try {
-    return JSON.parse(readFileSync(stateFile(sessionId), "utf8"));
+    const reservationId = readFileSync(file, "utf8");
+    unlinkSync(file);
+    return reservationId;
   } catch {
-    return { reservations: {} };
+    return undefined;
   }
-}
-
-export function writeState(sessionId, state) {
-  mkdirSync(stateDir(), { recursive: true });
-  writeFileSync(stateFile(sessionId), JSON.stringify(state));
-}
-
-export function rememberReservation(sessionId, toolUseId, reservationId) {
-  const state = readState(sessionId);
-  state.reservations[toolUseId] = reservationId;
-  writeState(sessionId, state);
-}
-
-export function takeReservation(sessionId, toolUseId) {
-  const state = readState(sessionId);
-  const reservationId = state.reservations[toolUseId];
-  if (reservationId !== undefined) {
-    delete state.reservations[toolUseId];
-    writeState(sessionId, state);
-  }
-  return reservationId;
 }
 
 export function pendingReservations(sessionId) {
-  return Object.entries(readState(sessionId).reservations);
+  const dir = sessionDir(sessionId);
+  try {
+    return readdirSync(dir).map((name) => [name, readFileSync(join(dir, name), "utf8")]);
+  } catch {
+    return [];
+  }
 }
 
 export function clearState(sessionId) {
   try {
-    rmSync(stateFile(sessionId), { force: true });
+    rmSync(sessionDir(sessionId), { recursive: true, force: true });
   } catch {
     // best effort
   }
