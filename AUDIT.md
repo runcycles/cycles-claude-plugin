@@ -1,8 +1,8 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
-**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8)
+**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8 and metadata release review)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
-**Plugin:** `cycles-budget-guard` v0.1.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
+**Plugin:** `cycles-budget-guard` v0.1.1 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
 
 ## Current design (authoritative — supersedes anything below that contradicts it)
 
@@ -23,6 +23,14 @@
 75 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
 
 ## History (appended review rounds; superseded statements above)
+
+---
+
+## Metadata Release Review (2026-07-22) — version and discoverability
+
+1. **Release pin aligned:** plugin, marketplace, package, lockfile, README, and audit metadata now consistently declare v0.1.1 so Claude Code can discover the merged enforcement update instead of remaining pinned to v0.1.0.
+2. **Marketplace metadata completed:** canonical project, repository, license, author, category, tags, and search keywords are included and validated against Claude Code's strict plugin schema.
+3. **Repository discoverability improved:** README badges, audience guidance, enforcement verification, canonical resources, GitHub topics, homepage, description, and a dedicated social-preview asset make the project easier to identify and evaluate.
 
 ---
 
