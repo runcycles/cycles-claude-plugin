@@ -281,6 +281,17 @@ describe("post-tool-use settlement", () => {
 });
 
 describe("post-tool-use-failure", () => {
+  it("no-ops when unconfigured, misconfigured, or tool is exempt", async () => {
+    const fn = mockCycles([]);
+    await postToolUseFailure(input(), {});
+    await postToolUseFailure(input(), { ...ENV, CYCLES_DEFAULT_TENANT: "   " });
+    await postToolUseFailure(input({ tool_name: "mcp__cycles__cycles_reserve" }), ENV);
+    await postToolUseFailure(input({ tool_name: "TodoWrite" }), ENV);
+    await postToolUseFailure(input(), ENV); // configured but nothing reserved
+    expect(fn).not.toHaveBeenCalled();
+    expect(written()).toBe("");
+  });
+
   it("releases the hold when the tool call failed", async () => {
     const fn = mockCycles([
       { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_tf" } },
