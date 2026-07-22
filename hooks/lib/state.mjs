@@ -13,8 +13,23 @@ function sanitize(value) {
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+function rootDir() {
+  return join(tmpdir(), "cycles-claude-plugin");
+}
+
 function sessionDir(sessionId) {
-  return join(tmpdir(), "cycles-claude-plugin", sanitize(sessionId));
+  return join(rootDir(), sanitize(sessionId));
+}
+
+// All sessions with unsettled records — used by SessionStart recovery to
+// sweep leftovers from crashed or never-resumed sessions.
+export function staleSessions(excludeSessionId) {
+  try {
+    const excluded = sanitize(excludeSessionId ?? "");
+    return readdirSync(rootDir()).filter((name) => name !== excluded);
+  } catch {
+    return [];
+  }
 }
 
 // Records are typed: { type: "hold", reservationId } for an open

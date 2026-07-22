@@ -1,22 +1,27 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
-**Date:** 2026-07-22
+**Last full revision:** 2026-07-22 (after external enforcement review rounds 1–3)
 **Spec:** `cycles-protocol-v0.yaml` (wire format hand-implemented, zero-dependency)
-**Plugin:** `cycles-budget-guard` v0.1.0 (Claude Code hooks: PreToolUse / PostToolUse / SessionEnd + bundled `@runcycles/mcp-server`)
+**Plugin:** `cycles-budget-guard` v0.1.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
 
-## Design decisions
+## Current design (authoritative — supersedes anything below that contradicts it)
 
-- **Dispatch-path enforcement:** PreToolUse reserves before every tool call and emits `permissionDecision: "deny"` on Cycles DENY / `BUDGET_EXCEEDED` — enforcement the model cannot skip, closing the cooperative gap documented in the MCP server's security model.
-- **Retry-stable idempotency keys, at the correct layer:** keys are `cc_<sha256(session_id, prompt_id, tool_name, tool_input)[:32]>`. This is the design that was evaluated and deliberately REJECTED for the stateless MCP server (see cycles-mcp-server AUDIT, Agent Ergonomics section): only a layer with a stable per-call identity can generate keys safely. Hooks have one. PostToolUse recomputes the identical key for commit pairing (`_c` suffix; SessionEnd releases use `_r`). Documented limit: two identical calls in one prompt turn collide (single shared reservation — under-counts one flat cost, never over-charges).
-- **Wire conformance:** requests hand-built per spec (snake_case: `idempotency_key`, `ttl_ms`, `estimate {unit, amount}`, `X-Cycles-API-Key` auth); responses read tolerantly (`reservation_id`, `reason_code`, `scope_path`). Zero runtime dependencies — the whole enforcement surface is ~200 lines of auditable code.
-- **Fail-open default, fail-closed option:** unreachable server ⇒ allow + stderr warning (availability over enforcement, the OpenClaw guard's precedent); `CYCLES_CC_FAIL_CLOSED=true` inverts. INVALID config (bad `CYCLES_DEFAULT_*`) always fails closed with a named error — misconfiguration must not silently disable enforcement. UNconfigured (no base URL/subject) is dormant by design.
-- **Recursion guard:** tool names matching `/cycles/i` are never gated (the bundled MCP server's tools would otherwise recurse through the hook), plus operator `CYCLES_CC_SKIP_TOOLS`.
-- **Privacy:** only subject identifiers, tool NAME, unit/amount, and local hash digests leave the machine. `tool_input` is hashed locally for identity and never transmitted.
-- **State:** per-session JSON in the OS temp dir maps identity-key → reservation_id across hook processes; session ids are sanitized for path safety; SessionEnd releases pending holds and clears the file; server-side TTL (300s) is the backstop for crashes.
+- **Dispatch-path enforcement:** PreToolUse reserves before every GATED tool call and denies on: server DENY; any authoritative 4xx protocol rejection (exhausted/frozen/closed budgets, debt, auth, invalid request); any MALFORMED response (unknown decision, ALLOW without reservation_id, mistyped caps fields) — integrity failures never grant execution. Fail-open (allow + warning) applies ONLY to outages: 5xx, network errors, and the 4s request timeout; `CYCLES_CC_FAIL_CLOSED=true` denies on outages too.
+- **Enforcement scope:** all tools EXCEPT the operator skip list (default: local zero-cost reads — `Read|Glob|Grep|LS|NotebookRead|TodoWrite|AskUserQuestion`; set `CYCLES_CC_SKIP_TOOLS=^$` to gate everything) and the Cycles budget tools themselves, matched by exact namespace (`^mcp__(plugin_cycles-budget-guard_)?cycles__` — lookalikes like `mcp__bicycles__*` are gated).
+- **Caps:** ALLOW_WITH_CAPS requires a validated caps object (every present field type-checked; violations are malformed → deny). `tool_allowlist`/`tool_denylist` are enforced at the gate — a violating call is blocked and its just-taken hold released (recorded for retry if the release fails). Remaining caps are surfaced to the model via `hookSpecificOutput.additionalContext` (no `permissionDecision`, so the user permission flow is untouched).
+- **Identity:** keys are `cc_<sha256(session_id | tool_use_id)[:32]>` — `tool_use_id` is the documented per-call unique id, so distinct identical calls charge separately and transport retries replay. Content-hash fallback exists only for Claude Code versions predating `tool_use_id` (collision limit documented there).
+- **Settlement lifecycle:** success → commit (response must confirm `COMMITTED`); tool failure → release via PostToolUseFailure (`RELEASED` confirmed); reservation expired mid-run → the executed action is still charged via a usage event (`APPLIED` confirmed), with the state record durably downgraded to `{type:"event"}` BEFORE the attempt. State (one file per record, per-session dir, typed `hold`/`event` records) is deleted only after a CONFIRMED settlement or a terminal reservation code (`RESERVATION_EXPIRED`/`RESERVATION_FINALIZED`/`NOT_FOUND`); auth/idempotency/invalid-request errors retain it everywhere (Post, Failure, SessionEnd alike).
+- **Replay points:** replayed Post hooks retry pending events; SessionEnd settles the session's leftovers; SessionStart sweeps OTHER sessions' leftovers — so a pending charge always has a deterministic next retry, even after crashes.
+- **TTL:** configurable `CYCLES_CC_TTL_MS` (default 30 min, clamped 1s–24h) — chosen to outlive permission prompts and long tool runs.
+- **Failure posture:** unconfigured (no base URL or no subject) = fully dormant; INVALID config on an otherwise-configured setup = loud deny naming the variable; outages = fail-open by default with stderr warnings.
+- **Privacy:** only subject identifiers, tool NAMEs, unit/amount, and local hash digests leave the machine; `tool_input` is hashed locally and never transmitted.
+- **Zero runtime dependencies** by policy; every network call carries a 4s deadline; LF enforced repo-wide (`.gitattributes`).
 
-## Verification (2026-07-22)
+## Current verification (2026-07-22)
 
-28 tests, 99.08% line coverage (enforcement paths: ALLOW/DENY/409/fail-open/fail-closed/misconfig-deny; recursion and skip guards; commit pairing and key stability; low-budget additionalContext; session-end release incl. failure tolerance; hostile session-id sanitization; wire-format assertions against the spec's field names). Process-level entry blocks excluded from coverage and exercised by an end-to-end stdin run.
+58 tests across unit + checked-in e2e (real hook processes against a live HTTP server); coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × ubuntu/windows.
+
+## History (appended review rounds; superseded statements above)
 
 ---
 

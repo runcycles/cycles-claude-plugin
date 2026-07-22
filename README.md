@@ -9,7 +9,8 @@
 - **PreToolUse** — reserves a flat per-call cost before each gated tool call. Any authoritative Cycles rejection — DENY, budget exhausted/frozen/closed, debt, auth failure, invalid request — blocks the call with a reason the model sees; fail-open applies ONLY to outages (5xx/network/timeout). `ALLOW_WITH_CAPS` tool allow/denylists are enforced (violating calls are blocked and the hold returned); other caps are surfaced to the transcript. Idempotency keys derive from `tool_use_id` (unique per call), so transport retries never double-reserve — this is the layer that *can* hold a key stable, unlike a stateless MCP server.
 - **PostToolUse** (success) — commits the reservation; if it expired mid-run (long tool, permission prompt), usage is still charged via a fallback event. Injects a low-budget warning into the model's context under 15% remaining.
 - **PostToolUseFailure** — releases the hold when the tool call failed: failed attempts return budget instead of charging it.
-- **SessionEnd** — releases anything left dangling by crashes or interrupts (state survives failed settlements so this always has the full picture).
+- **SessionEnd** — settles anything the per-call hooks could not: releases open holds, applies pending usage events. State survives failed settlements.
+- **SessionStart** — recovery sweep for records left by crashed or never-resumed sessions, so an executed action's pending charge always has a deterministic replay point.
 - **Companion MCP server** — the `@runcycles/mcp-server` toolset (balances, explicit reserves, usage events), **pinned to an exact version** and fetched via npx on first run (not vendored into this repo).
 - **`/cycles-budget-guard:budget`** — one-command budget status report.
 
@@ -39,6 +40,7 @@ If `CYCLES_BASE_URL` or a subject default is missing, the plugin stays dormant (
 | `CYCLES_CC_COST` | `1` | Flat cost reserved+committed per tool call |
 | `CYCLES_CC_SKIP_TOOLS` | `^(Read\|Glob\|Grep\|LS\|NotebookRead\|TodoWrite\|AskUserQuestion)$` | Regex of tool names never gated (default: local zero-cost reads) |
 | `CYCLES_CC_FAIL_CLOSED` | `false` | `true` blocks tool calls when the Cycles server is unreachable |
+| `CYCLES_CC_TTL_MS` | `1800000` (30 min) | Reservation TTL; must outlive permission prompts and long tool runs |
 
 Cycles' own budget tools are never gated (recursion guard), regardless of `CYCLES_CC_SKIP_TOOLS`.
 

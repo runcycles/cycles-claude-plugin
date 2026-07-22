@@ -5,7 +5,7 @@
 // will charge them.
 
 import { loadConfig, isConfigured } from "./lib/config.mjs";
-import { release, createEvent } from "./lib/cycles-client.mjs";
+import { release, createEvent, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
 import { pendingRecords, deleteReservation, clearStateIfEmpty } from "./lib/state.mjs";
 
 export async function run(input, env = process.env) {
@@ -34,8 +34,9 @@ export async function run(input, env = process.env) {
       }
       deleteReservation(input.session_id, key);
     } catch (err) {
-      if (record.type !== "event" && err?.authoritative) {
-        // Hold already finalized/expired server-side — nothing left to free.
+      if (record.type !== "event" && TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
+        // Hold definitively gone server-side — nothing left to free. Other
+        // 4xx (auth, idempotency) are correctable: keep the record.
         deleteReservation(input.session_id, key);
         continue;
       }

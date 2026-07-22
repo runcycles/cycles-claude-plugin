@@ -264,6 +264,68 @@ describe("post-tool-use", () => {
   });
 });
 
+describe("caps validation (malformed caps never bypass)", () => {
+  it("denies when ALLOW_WITH_CAPS carries no caps object", async () => {
+    mockCycles([{ status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: "rsv_nc" } }]);
+    await preToolUse(input(), ENV);
+    expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("denies when a caps field is mistyped — a string denylist is not a missing cap", async () => {
+    mockCycles([
+      { status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: "rsv_mc", caps: { tool_denylist: "Bash" } } },
+    ]);
+    await preToolUse(input(), ENV);
+    const out = JSON.parse(written());
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("tool_denylist");
+    expect(pendingRecords(session)).toEqual([]);
+
+    stdout.mockClear();
+    mockCycles([
+      { status: 200, body: { decision: "ALLOW_WITH_CAPS", reservation_id: "rsv_mt2", caps: { max_tokens: "500" } } },
+    ]);
+    await preToolUse(input(), ENV);
+    expect(JSON.parse(written()).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+});
+
+describe("session-start recovery", () => {
+  it("sweeps stale sessions: applies pending events, releases holds, keeps correctable failures", async () => {
+    const stale = `stale-${Math.random().toString(36).slice(2)}`;
+    const { writeRecord, rememberReservation: rem } = await import("../hooks/lib/state.mjs");
+    writeRecord(stale, "k_evt", { type: "event", toolName: "Bash", amount: 2 });
+    rem(stale, "k_hold", "rsv_stale");
+    const fn = mockCycles([
+      { status: 200, body: { status: "APPLIED", event_id: "evt_s" } },
+      { status: 200, body: { status: "RELEASED" } },
+    ]);
+    const { run: sessionStart } = await import("../hooks/session-start.mjs");
+    await sessionStart({ session_id: session }, ENV);
+    const urls = fn.mock.calls.map((c) => c[0]).sort();
+    expect(urls).toEqual(["http://cycles/v1/events", "http://cycles/v1/reservations/rsv_stale/release"]);
+    expect(pendingRecords(stale)).toEqual([]);
+
+    // correctable failure retains the record for the next replay point
+    const stale2 = `stale2-${Math.random().toString(36).slice(2)}`;
+    rem(stale2, "k2", "rsv_stale2");
+    mockCycles([{ status: 401, body: { error: "UNAUTHORIZED", message: "bad key" } }]);
+    await sessionStart({ session_id: session }, ENV);
+    expect(pendingRecords(stale2)).toHaveLength(1);
+    clearState(stale2);
+  });
+
+  it("never touches the current session's records", async () => {
+    const { rememberReservation: rem } = await import("../hooks/lib/state.mjs");
+    rem(session, "k_mine", "rsv_mine");
+    const fn = mockCycles([]);
+    const { run: sessionStart } = await import("../hooks/session-start.mjs");
+    await sessionStart({ session_id: session }, ENV);
+    expect(pendingRecords(session)).toHaveLength(1);
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
 describe("post-tool-use settlement", () => {
   it("charges via usage event when the reservation expired mid-run", async () => {
     const fn = mockCycles([
@@ -440,6 +502,16 @@ describe("session-end", () => {
     await preToolUse(input({ tool_use_id: "tooluse_se2" }), ENV);
     await sessionEnd({ session_id: session }, ENV);
     expect(pendingRecords(session)).toHaveLength(1); // transient — kept for TTL story
+  });
+
+  it("retains records on correctable 4xx at session end (auth is not terminal)", async () => {
+    mockCycles([
+      { status: 200, body: { decision: "ALLOW", reservation_id: "rsv_auth" } },
+      { status: 401, body: { error: "UNAUTHORIZED", message: "bad key" } },
+    ]);
+    await preToolUse(input({ tool_use_id: "tooluse_se3" }), ENV);
+    await sessionEnd({ session_id: session }, ENV);
+    expect(pendingRecords(session)).toHaveLength(1);
   });
 
   it("no-ops when unconfigured or misconfigured", async () => {

@@ -3,7 +3,7 @@
 // return budget to the pool instead of charging it.
 
 import { loadConfig, isConfigured } from "./lib/config.mjs";
-import { release } from "./lib/cycles-client.mjs";
+import { release, TERMINAL_RESERVATION_CODES } from "./lib/cycles-client.mjs";
 import { toolCallKey } from "./lib/identity.mjs";
 import { peekRecord, deleteReservation } from "./lib/state.mjs";
 import { CYCLES_TOOL_NS } from "./pre-tool-use.mjs";
@@ -24,11 +24,6 @@ export async function run(input, env = process.env) {
   if (!record) return;
   if (record.type === "event") return; // pending charge for an executed action — session end applies it
 
-  // Only these mean the hold is definitively gone server-side. Other 4xx
-  // (auth, idempotency mismatch, invalid request) are correctable — keep the
-  // record so SessionEnd retries the release.
-  const TERMINAL = new Set(["RESERVATION_EXPIRED", "RESERVATION_FINALIZED", "NOT_FOUND"]);
-
   try {
     await release(config, {
       reservationId: record.reservationId,
@@ -37,7 +32,7 @@ export async function run(input, env = process.env) {
     });
     deleteReservation(input.session_id, key);
   } catch (err) {
-    if (TERMINAL.has(err?.errorCode)) {
+    if (TERMINAL_RESERVATION_CODES.has(err?.errorCode)) {
       deleteReservation(input.session_id, key);
       return;
     }

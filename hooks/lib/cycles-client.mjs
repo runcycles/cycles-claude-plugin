@@ -32,18 +32,49 @@ async function post(config, path, body) {
   return json;
 }
 
-function normalizeCaps(caps) {
-  if (typeof caps !== "object" || caps === null) return undefined;
+// Caps are load-bearing enforcement data: a mistyped field silently dropped
+// would BYPASS the cap (tool_denylist: "Bash" is not a missing cap, it is a
+// malformed one). Every present field must have the correct shape, and
+// ALLOW_WITH_CAPS without a caps object is malformed by definition.
+function isStringArray(v) {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function validateCaps(caps) {
+  if (typeof caps !== "object" || caps === null || Array.isArray(caps)) {
+    throw malformed(`Cycles returned ALLOW_WITH_CAPS with a malformed caps object (${JSON.stringify(caps)})`);
+  }
+  const checks = [
+    ["max_tokens", (v) => typeof v === "number" && Number.isFinite(v)],
+    ["max_steps_remaining", (v) => typeof v === "number" && Number.isFinite(v)],
+    ["cooldown_ms", (v) => typeof v === "number" && Number.isFinite(v)],
+    ["tool_allowlist", isStringArray],
+    ["tool_denylist", isStringArray],
+  ];
+  for (const [field, ok] of checks) {
+    if (caps[field] !== undefined && !ok(caps[field])) {
+      throw malformed(`Cycles caps field ${field} has the wrong type (${JSON.stringify(caps[field])})`);
+    }
+  }
   return {
     maxTokens: caps.max_tokens,
     maxStepsRemaining: caps.max_steps_remaining,
-    toolAllowlist: Array.isArray(caps.tool_allowlist) ? caps.tool_allowlist : undefined,
-    toolDenylist: Array.isArray(caps.tool_denylist) ? caps.tool_denylist : undefined,
+    toolAllowlist: caps.tool_allowlist,
+    toolDenylist: caps.tool_denylist,
     cooldownMs: caps.cooldown_ms,
   };
 }
 
 const VALID_DECISIONS = new Set(["ALLOW", "ALLOW_WITH_CAPS", "DENY"]);
+
+// Only these error codes prove a reservation is definitively gone
+// server-side; every other failure (including auth/idempotency 4xx) is
+// correctable and settlement records must survive it.
+export const TERMINAL_RESERVATION_CODES = new Set([
+  "RESERVATION_EXPIRED",
+  "RESERVATION_FINALIZED",
+  "NOT_FOUND",
+]);
 
 // A response we cannot interpret is an INTEGRITY failure, not an outage:
 // enforcement must never be granted on a garbled answer. Callers treat
@@ -79,11 +110,15 @@ export async function reserve(config, { idempotencyKey, toolName, amount }) {
   if (json.decision !== "DENY" && (typeof json.reservation_id !== "string" || json.reservation_id === "")) {
     throw malformed("Cycles returned ALLOW without a reservation_id");
   }
+  let caps;
+  if (json.decision === "ALLOW_WITH_CAPS" || json.caps !== undefined) {
+    caps = validateCaps(json.caps);
+  }
   return {
     decision: json.decision,
     reservationId: json.reservation_id,
     reasonCode: json.reason_code,
-    caps: normalizeCaps(json.caps),
+    caps,
   };
 }
 
