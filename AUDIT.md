@@ -2,7 +2,7 @@
 
 **Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8, metadata release review, and operational hardening)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
-**Plugin:** `cycles-budget-guard` v0.2.0 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.0`, fetched via npx — not vendored)
+**Plugin:** `cycles-budget-guard` v0.2.1 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.1`, fetched via npx — not vendored)
 
 ## Current design (authoritative — supersedes anything below that contradicts it)
 
@@ -23,6 +23,14 @@
 81 tests across unit + checked-in e2e (real hook processes against a live HTTP server), secret-redaction diagnostics, and bounded install-smoke execution; coverage thresholds ENFORCED in vitest.config.js and verified with bare exit codes: statements ≥95, lines ≥95, functions ≥95, branches ≥85. CI: Node 22/24 × Ubuntu/Windows/macOS, strict Claude plugin validation, metadata consistency, and isolated install smoke testing.
 
 ## History (appended review rounds; superseded statements above)
+
+---
+
+## Companion Maintenance Review (2026-09-01)
+
+1. **Companion pin:** update the exact `@runcycles/mcp-server` pin from 0.6.0 to 0.6.1. The companion release changes only its internal `runcycles` dependency from ^0.3.0 to ^0.4.0; its direct client-adapter calls are unchanged and do not use the streaming lifecycle behavior changed by that SDK release.
+2. **Verification:** the plugin metadata, lint, coverage suite, strict plugin validation, isolated installation smoke test, and zero-vulnerability npm audit cover the updated pin. The companion release itself passed typecheck, lint, and 197 tests upstream. The development lockfile also resolves `brace-expansion` 5.0.9 to clear the current denial-of-service advisories inherited through ESLint.
+3. **Issue hygiene:** the scheduled companion-version monitor now compares open issue titles exactly, preventing a text-search mismatch from opening the same update issue each week.
 
 ---
 

@@ -1,7 +1,7 @@
 # Cycles Budget Guard — Claude Code plugin
 
 [![CI](https://github.com/runcycles/cycles-claude-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/runcycles/cycles-claude-plugin/actions/workflows/ci.yml)
-[![Plugin v0.2.0](https://img.shields.io/badge/plugin-v0.2.0-7c3aed)](CHANGELOG.md)
+[![Plugin v0.2.1](https://img.shields.io/badge/plugin-v0.2.1-7c3aed)](CHANGELOG.md)
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 

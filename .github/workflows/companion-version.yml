@@ -39,9 +39,10 @@ jobs:
           CURRENT_VERSION: ${{ steps.versions.outputs.current }}
           LATEST_VERSION: ${{ steps.versions.outputs.latest }}
         run: |
-          existing="$(gh issue list --state open --search 'Update @runcycles/mcp-server in:title' --json number --jq 'length')"
+          title="Update @runcycles/mcp-server to $LATEST_VERSION"
+          existing="$(gh issue list --state open --limit 100 --json title | jq --arg title "$title" '[.[] | select(.title == $title)] | length')"
           if [[ "$existing" == "0" ]]; then
             gh issue create \
-              --title "Update @runcycles/mcp-server to $LATEST_VERSION" \
+              --title "$title" \
               --body "The plugin pins @runcycles/mcp-server@$CURRENT_VERSION, while npm reports $LATEST_VERSION. Review the companion release, update the exact pin, bump the plugin version, and run the full enforcement test suite before merging."
           fi

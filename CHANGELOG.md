@@ -2,6 +2,17 @@
 
 All notable changes to Cycles Budget Guard are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-09-01
+
+### Changed
+
+- Update the exactly pinned companion `@runcycles/mcp-server` from 0.6.0 to 0.6.1 after reviewing its internal client-library upgrade for compatibility with the plugin integration.
+
+### Fixed
+
+- Prevent the scheduled companion-version monitor from opening duplicate update issues by matching existing open issue titles exactly.
+- Refresh the development lockfile to `brace-expansion` 5.0.9, clearing the current denial-of-service advisories inherited through the ESLint toolchain.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added
@@ -39,3 +50,4 @@ All notable changes to Cycles Budget Guard are documented here. This project fol
 
 [0.1.1]: https://github.com/runcycles/cycles-claude-plugin/releases/tag/v0.1.1
 [0.2.0]: https://github.com/runcycles/cycles-claude-plugin/releases/tag/v0.2.0
+[0.2.1]: https://github.com/runcycles/cycles-claude-plugin/releases/tag/v0.2.1
