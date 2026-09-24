@@ -1,5 +1,14 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-09-24 — Development tooling dependency review
+
+Dependabot PR #19 updates Vitest and its V8 coverage provider together from
+5.0.0 to 5.0.1, with their resolved Vite/Rolldown tooling dependencies.
+The Node 22/24 test matrix on Linux, Windows, and macOS and Claude plugin
+validation passed on the dependency head. Runtime hooks, protocol handling,
+and the published plugin version are unchanged. Coverage gates are unchanged.
+The audited head must also report both required CodeQL analyses before merge.
+
 **Last full revision:** 2026-07-22 (after external enforcement review rounds 1–8, metadata release review, and operational hardening)
 **Spec:** [`cycles-protocol-v0.yaml`](https://github.com/runcycles/cycles-protocol/blob/main/cycles-protocol-v0.yaml) (wire format hand-implemented, zero-dependency; reference docs at https://runcycles.io/protocol)
 **Plugin:** `cycles-budget-guard` v0.2.1 — hooks: PreToolUse / PostToolUse / PostToolUseFailure / SessionEnd / SessionStart + companion `@runcycles/mcp-server` (pinned `@0.6.1`, fetched via npx — not vendored)
