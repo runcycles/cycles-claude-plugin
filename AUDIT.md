@@ -1,5 +1,9 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-10-04 — Dependency maintenance
+
+Dependabot PR #20 updates the paired Vitest/coverage-v8 packages from 5.0.1 to 5.0.2 and ESLint from 10.10.0 to 10.11.0. Hook behavior and plugin metadata are unchanged. All six Node 22/24 platform test jobs, plugin validation, and both required CodeQL analyses must pass on the updated commit before merge. Local lint and tests pass with 97.46% line coverage.
+
 ## 2026-09-24 — Development tooling dependency review
 
 Dependabot PR #19 updates Vitest and its V8 coverage provider together from
