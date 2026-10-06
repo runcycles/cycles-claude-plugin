@@ -1,5 +1,9 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-10-06 — Development tooling dependency review
+
+Dependabot PR #22 updates Vitest and its V8 coverage provider together from 5.0.2 to 5.0.3, with the resolved Vite 8.3.2 and Rolldown 1.2.12 tooling dependencies. The why-is-node-running 3.2.1 pin follows the upstream Vitest patch. Runtime hooks and protocol handling are unchanged. Local npm ci, lint, metadata validation, and all 81 tests pass with 97.46% line coverage. The existing coverage thresholds remain enabled. All six Node 22/24 platform test jobs, plugin validation, and both required CodeQL analyses must pass on the updated commit before merge.
+
 ## 2026-10-04 — Brace expansion dependency review
 
 Dependabot PR #21 updates the development-only brace-expansion lockfile entry from 5.0.9 to 5.0.12. The upstream patches address parser stack exhaustion and bound repeated brace rewrites. Plugin runtime code is unchanged. Local npm ci, lint, metadata validation, and all 81 tests pass with 97.46% line coverage. All platform tests and both required CodeQL analyses must pass on the updated commit before merge.
