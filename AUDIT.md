@@ -1,5 +1,9 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-10-14 — Dependency maintenance
+
+Consolidates Dependabot PRs #25 and #24: SHA-pinned setup-node 7.1.0 and development-only ESLint 10.12.0. Runtime hooks, protocol handling, and plugin metadata are unchanged. The six Node 22/24 platform test and coverage jobs, plugin validation, and both required CodeQL analyses must pass on the combined commit before merge. Existing coverage thresholds remain enabled.
+
 ## 2026-10-09 — Source map dependency review
 
 Dependabot PR #23 updates the development-only source-map-js lockfile entry from 1.2.1 to 1.2.2. The upstream release fixes denial of service from malicious indexed source maps and a browser CSP compatibility issue. Runtime hooks and protocol handling are unchanged. Local npm ci, lint, metadata validation, and all 81 tests pass with 97.46% line coverage. All six Node 22/24 platform test jobs, plugin validation, and both required CodeQL analyses must pass on the updated commit before merge.
