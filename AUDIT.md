@@ -1,5 +1,14 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-10-19 — Dependabot dependency review
+
+Consolidates the following reviewed updates on current main:
+
+- PR #26: chore(deps-dev): bump the development-tooling group with 3 updates
+
+Workflow actions remain pinned to verified upstream commit SHAs. Existing supported runtime versions, application code, and YAML protocol contracts are preserved. Existing lint, build, test, coverage, conformance, and applicable security checks must pass on the combined commit before merge; coverage requirements are not lowered.
+
+
 ## 2026-10-14 — Dependency maintenance
 
 Consolidates Dependabot PRs #25 and #24: SHA-pinned setup-node 7.1.0 and development-only ESLint 10.12.0. Runtime hooks, protocol handling, and plugin metadata are unchanged. The six Node 22/24 platform test and coverage jobs, plugin validation, and both required CodeQL analyses must pass on the combined commit before merge. Existing coverage thresholds remain enabled.
