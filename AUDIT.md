@@ -1,5 +1,15 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-11-03 — PR #27 ESLint dependency review
+
+Updates development-only ESLint from 10.13.0 to 10.14.0 and its resolved
+minimatch dependency from 10.2.5 to 10.2.6. Reviewed the upstream lint-rule
+fixes and minimatch minimum-version change; runtime hooks and plugin
+metadata are unchanged. The original PR head passed all six Node 22/24
+platform test jobs and plugin validation, with 97.46% line coverage.
+All platform tests, existing coverage gates, plugin validation, and both
+required CodeQL analyses must pass on the audited head before merge.
+
 ## 2026-10-19 — Dependabot dependency review
 
 Consolidates the following reviewed updates on current main:
