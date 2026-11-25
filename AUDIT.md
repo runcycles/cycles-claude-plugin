@@ -1,5 +1,9 @@
 # Cycles Budget Guard (Claude Code plugin) — Audit
 
+## 2026-11-25 - Dependabot dependency review
+
+PR #29 updates the development tools ESLint to 10.15.0 and Vitest and its V8 coverage provider to 5.1.1. CI tested Node 22 and 24 on Linux, Windows, and macOS. The Node 22 Linux run reported 97.46% line coverage.
+
 ## 2026-11-11 - Dependabot dependency review
 
 PR #28 updates Vitest and coverage-v8 together from 5.0.5 to 5.1.0, with their locked development-toolchain dependencies. The project already uses Vitest 5 and tests Node 22/24. Cross-platform Linux, Windows, and macOS tests, lint, metadata validation, and existing coverage thresholds must pass on the reviewed commit.
